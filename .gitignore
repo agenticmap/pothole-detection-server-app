@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables (secrets)
+.env
+
+# Local frame storage
+storage/
+test_storage/
+
+# Machine-specific local Claude settings (keeps absolute paths out of the repo)
+.claude/settings.local.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# pytest
+.pytest_cache/
+
+# ruff
+.ruff_cache/
+
+# Distribution
+dist/
+*.egg-info/
