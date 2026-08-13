@@ -13,7 +13,9 @@ Idempotency:
   - Duplicate uploads receive 200 (not 409) — same as the events contract
 """
 
+import json
 import logging
+from typing import Annotated, Union
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -36,8 +38,10 @@ async def ingest_frame(
     pool: DbPool,
     device_id: DeviceId,
     version: ApiVersion,
-    metadata: UploadFile = File(..., description="JSON metadata part"),
-    frame: UploadFile = File(..., description="JPEG image file"),
+    metadata: Annotated[
+        Union[UploadFile, str], File(description="JSON metadata part")
+    ],
+    frame: Annotated[UploadFile, File(description="JPEG image file")],
 ):
     """Receive a single camera frame with metadata from a mobile device.
 
@@ -51,10 +55,17 @@ async def ingest_frame(
     check_rate_limit(device_id, "frames", count=1)
 
     # ── Parse metadata JSON ───────────────────────────────────────────────────
+    # The metadata part is accepted both with and without a Content-Disposition
+    # filename. Starlette only builds an UploadFile when a filename is present;
+    # the Android client (OkHttp) sends this part with filename=null, which
+    # arrives as a plain string. Both shapes must work — see tests/test_frames.py.
     try:
-        metadata_bytes = await metadata.read()
-        import json
-
+        # Test for str, not UploadFile: the form parser yields Starlette's
+        # UploadFile, which is not an instance of FastAPI's subclass.
+        if isinstance(metadata, str):
+            metadata_bytes = metadata.encode("utf-8")
+        else:
+            metadata_bytes = await metadata.read()
         metadata_dict = json.loads(metadata_bytes)
         frame_metadata = FrameMetadata(**metadata_dict)
     except (json.JSONDecodeError, ValueError) as e:

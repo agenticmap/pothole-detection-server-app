@@ -32,10 +32,15 @@ class Settings(BaseSettings):
     # ── Server ────────────────────────────────────────────────────────────────
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
     env: str = "development"
+    log_level: str = "INFO"  # root logger level, applied in app/main.py
 
     # ── Rate Limiting ─────────────────────────────────────────────────────────
-    rate_limit_events_per_hour: int = 100
-    rate_limit_frames_per_hour: int = 100
+    # Sized for a real collection drive, not a demo. A drive's worth of buffered
+    # events/frames drains in one burst when the device rejoins Wi-Fi; the old
+    # 100/hour ceiling 429'd mid-drain and the client retried the same rows
+    # forever. Frames are gated on-device to ~1 per 4 s (900/hour worst case).
+    rate_limit_events_per_hour: int = 5000
+    rate_limit_frames_per_hour: int = 5000
 
     # ── Ingestion ─────────────────────────────────────────────────────────────
     max_batch_size: int = 100

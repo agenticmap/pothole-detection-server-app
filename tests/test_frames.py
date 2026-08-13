@@ -170,6 +170,90 @@ class TestFramesValidation:
         assert parsed.detections is None
 
 
+class TestFramesAndroidWireFormat:
+    """Reproduce the real Android client's multipart bytes.
+
+    The rest of this module posts via httpx `files=`, which ALWAYS emits a
+    `filename` on every part. The Android client uses OkHttp:
+
+        .addFormDataPart("metadata", null, RequestBody.create(json, JSON))
+
+    and OkHttp omits `; filename=` entirely when the filename is null. Starlette
+    only builds an UploadFile when a filename is present, so the metadata part
+    arrives as a plain string. Declaring it `metadata: UploadFile` therefore
+    rejected every real frame upload with 422 while the whole suite stayed green.
+
+    These tests build the multipart body by hand so the bytes — not the client
+    library's conveniences — are what gets asserted on.
+    """
+
+    BOUNDARY = "----OkHttpBoundary7MA4YWxkTrZu0gW"
+
+    @classmethod
+    def _body(cls, metadata: bytes, *, metadata_filename: str | None) -> bytes:
+        """Build a multipart body, optionally omitting the metadata filename."""
+        disposition = 'Content-Disposition: form-data; name="metadata"'
+        if metadata_filename is not None:
+            disposition += f'; filename="{metadata_filename}"'
+        return b"".join(
+            [
+                f"--{cls.BOUNDARY}\r\n{disposition}\r\n"
+                f"Content-Type: application/json\r\n\r\n".encode(),
+                metadata,
+                f'\r\n--{cls.BOUNDARY}\r\nContent-Disposition: form-data; '
+                f'name="frame"; filename="frame.jpg"\r\n'
+                f"Content-Type: image/jpeg\r\n\r\n".encode(),
+                MINIMAL_JPEG,
+                f"\r\n--{cls.BOUNDARY}--\r\n".encode(),
+            ]
+        )
+
+    @classmethod
+    def _headers(cls) -> dict:
+        return {
+            **VALID_HEADERS,
+            "Content-Type": f"multipart/form-data; boundary={cls.BOUNDARY}",
+        }
+
+    @pytest.mark.asyncio
+    async def test_metadata_part_without_filename_is_accepted(self, client):
+        """OkHttp shape: metadata part carries NO filename. Must not 422."""
+        meta = json.dumps(make_valid_frame_metadata("frame-okhttp-001")).encode()
+        response = await client.post(
+            "/api/v1/frames",
+            headers=self._headers(),
+            content=self._body(meta, metadata_filename=None),
+        )
+        assert response.status_code != 422, (
+            "metadata part without a filename was rejected — this is exactly the "
+            f"shape the Android client sends: {response.text}"
+        )
+        assert response.status_code == 200
+        assert response.json()["client_id"] == "frame-okhttp-001"
+
+    @pytest.mark.asyncio
+    async def test_metadata_part_with_filename_still_accepted(self, client):
+        """httpx shape: metadata part HAS a filename. Must keep working."""
+        meta = json.dumps(make_valid_frame_metadata("frame-okhttp-002")).encode()
+        response = await client.post(
+            "/api/v1/frames",
+            headers=self._headers(),
+            content=self._body(meta, metadata_filename="metadata.json"),
+        )
+        assert response.status_code == 200
+        assert response.json()["client_id"] == "frame-okhttp-002"
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_without_filename_returns_400(self, client):
+        """A filename-less part with bad JSON still gets the 400 path, not 422."""
+        response = await client.post(
+            "/api/v1/frames",
+            headers=self._headers(),
+            content=self._body(b"not-json{{{", metadata_filename=None),
+        )
+        assert response.status_code == 400
+
+
 class TestFramesRateLimit:
     """Test rate limiting for frame uploads."""
 

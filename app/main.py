@@ -12,6 +12,14 @@ from app.database import close_pool, create_pool, run_migrations, set_pool
 from app.fusion.scheduler import start_scheduler, stop_scheduler
 from app.routes import auth, events, frames, health, potholes
 
+# Uvicorn only configures its own `uvicorn.*` loggers, leaving the root logger at
+# WARNING — which silently discarded every logger.info() in this app, including
+# the "Events ingested" / "Frame ingested" lines needed to watch a real upload.
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
 

@@ -23,6 +23,7 @@ INSERT INTO asset_observation (
     speed_mps,
     bearing_deg,
     speed_accuracy_mps,
+    accuracy_m,
     accel_max_g,
     accel_std,
     magnitude,
@@ -38,7 +39,7 @@ VALUES (
     $1, $2, 'pothole', $3,
     $4::timestamptz,
     ST_SetSRID(ST_MakePoint($5, $6), 4326)::geography,
-    $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+    $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
 )
 ON CONFLICT (client_id) DO NOTHING
 """
@@ -79,16 +80,17 @@ async def insert_events(
                         event.speed_mps,        # $7
                         event.bearing_deg,      # $8
                         event.speed_accuracy_mps,  # $9
-                        event.accel_max_g,      # $10
-                        event.accel_std,        # $11
-                        event.magnitude,        # $12
-                        event.gbar_in_max,      # $13
-                        event.time_in_max,      # $14
-                        event.time_in_min,      # $15
-                        event.confidence,       # $16
-                        event.raw_window_b64,   # $17
-                        event.visual_confirmed,  # $18
-                        event.frame_client_id,  # $19
+                        event.accuracy_m,       # $10
+                        event.accel_max_g,      # $11
+                        event.accel_std,        # $12
+                        event.magnitude,        # $13
+                        event.gbar_in_max,      # $14
+                        event.time_in_max,      # $15
+                        event.time_in_min,      # $16
+                        event.confidence,       # $17
+                        event.raw_window_b64,   # $18
+                        event.visual_confirmed,  # $19
+                        event.frame_client_id,  # $20
                     )
                     # Both new inserts and conflict-skips count as accepted.
                     # The client deletes its local row for any ID in accepted.

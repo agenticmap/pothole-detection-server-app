@@ -28,10 +28,24 @@ class EventPayload(BaseModel):
     speed_mps: float = Field(..., ge=0.0, le=200.0)
     bearing_deg: float = Field(..., ge=0.0, le=360.0)
     speed_accuracy_mps: float | None = Field(default=None, ge=0.0, le=200.0)
-    accel_max_g: float = Field(..., ge=-50.0, le=50.0)
-    accel_std: float = Field(..., ge=0.0, le=100.0)
-    magnitude: float = Field(..., ge=0.0, le=500.0)
-    gbar_in_max: float | None = Field(default=None, ge=0.0, le=500.0)
+    accuracy_m: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=10_000.0,
+        description="GPS horizontal accuracy in metres; omitted by clients older than Room v4.",
+    )
+    # NOTE ON UNITS: despite the name, the client sends these in m/s², not g —
+    # PotholeRefinementService computes accel_max_g as linAccMax.getNorm() over
+    # raw TYPE_LINEAR_ACCELERATION values. The old ±50 bound was a g-scale bound
+    # applied to m/s² data, so any hard pothole strike (>50 m/s² ≈ 5 g) was
+    # rejected. Because the client re-sends the same oldest-100 rows on every
+    # retry, a single such row wedged the device's upload queue permanently.
+    # Bounds are kept only as a sanity ceiling on absurd values. The name is
+    # frozen by the v1 wire contract; renaming is a v2 concern.
+    accel_max_g: float = Field(..., ge=-200.0, le=200.0)
+    accel_std: float = Field(..., ge=0.0, le=200.0)
+    magnitude: float = Field(..., ge=0.0, le=2000.0)
+    gbar_in_max: float | None = Field(default=None, ge=0.0, le=2000.0)
     time_in_max: float | None = Field(default=None, ge=0.0)
     time_in_min: float | None = Field(default=None, ge=0.0)
     confidence: float = Field(..., ge=0.0, le=1.0)

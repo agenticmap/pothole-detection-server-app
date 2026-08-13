@@ -101,15 +101,33 @@ class TestEventsValidation:
 
     @pytest.mark.asyncio
     async def test_invalid_accel_max_g_returns_422(self, client):
-        """accel_max_g must be in [-50, 50]."""
+        """accel_max_g must be in [-200, 200] (m/s², not g — see EventPayload)."""
         event = make_valid_event()
-        event["accel_max_g"] = 55.0
+        event["accel_max_g"] = 250.0
         response = await client.post(
             "/api/v1/events",
             json={"events": [event]},
             headers=VALID_HEADERS,
         )
         assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_hard_pothole_strike_is_accepted(self, client):
+        """A hard strike (>50 m/s²) must NOT be rejected.
+
+        Regression: the old ±50 bound treated m/s² data as g, so real impacts
+        were 422'd. The client re-sends the same oldest rows every retry, so one
+        rejected row wedged the whole upload queue for that device.
+        """
+        event = make_valid_event()
+        event["accel_max_g"] = 78.5
+        event["magnitude"] = 640.0
+        response = await client.post(
+            "/api/v1/events",
+            json={"events": [event]},
+            headers=VALID_HEADERS,
+        )
+        assert response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_invalid_speed_returns_422(self, client):

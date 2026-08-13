@@ -114,12 +114,47 @@ async def test_public_individual_omits_detail_fields(client, db_pool):
 # ── Public-visibility filters (DB) ────────────────────────────────────────────
 
 async def test_repaired_and_single_device_clusters_are_excluded(client, db_pool):
-    async with db_pool.acquire() as conn:
-        await _insert_cluster(conn, "good", distinct_devices=2, repaired=False)
-        await _insert_cluster(conn, "repaired", distinct_devices=2, repaired=True)
-        await _insert_cluster(conn, "single-dev", distinct_devices=1, repaired=False)
+    """Corroboration + repair filters on the public read path.
 
-    resp = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16", headers=V)
-    assert resp.status_code == 200
-    ids = {it["id"] for it in resp.json()["items"]}
-    assert ids == {"good"}
+    Pins cluster_min_distinct_devices rather than inheriting it: a deployment may
+    legitimately run with 1 (solo test-drive collection), and this test is about
+    the filter logic, not about which threshold is configured locally.
+    """
+    from app.config import settings
+
+    original = settings.cluster_min_distinct_devices
+    settings.cluster_min_distinct_devices = 2
+    try:
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "good", distinct_devices=2, repaired=False)
+            await _insert_cluster(conn, "repaired", distinct_devices=2, repaired=True)
+            await _insert_cluster(conn, "single-dev", distinct_devices=1, repaired=False)
+
+        resp = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16", headers=V)
+        assert resp.status_code == 200
+        ids = {it["id"] for it in resp.json()["items"]}
+        assert ids == {"good"}
+    finally:
+        settings.cluster_min_distinct_devices = original
+
+
+async def test_single_device_clusters_visible_when_threshold_is_one(client, db_pool):
+    """Solo-drive mode: with the threshold at 1, one device's cluster goes public.
+
+    This is the configuration a single test driver must run, otherwise
+    GET /api/v1/potholes returns [] no matter how much data is collected.
+    """
+    from app.config import settings
+
+    original = settings.cluster_min_distinct_devices
+    settings.cluster_min_distinct_devices = 1
+    try:
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "solo", distinct_devices=1, repaired=False)
+
+        resp = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16", headers=V)
+        assert resp.status_code == 200
+        ids = {it["id"] for it in resp.json()["items"]}
+        assert "solo" in ids
+    finally:
+        settings.cluster_min_distinct_devices = original
