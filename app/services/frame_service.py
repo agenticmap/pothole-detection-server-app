@@ -117,6 +117,23 @@ def _store_jpeg_local(relative_path: str, jpeg_bytes: bytes) -> str:
     return relative_path
 
 
+async def load_frame_bytes(jpeg_url: str) -> bytes:
+    """Read a stored JPEG back by its stored url/path — inverse of _store_jpeg.
+
+    Used by the detection worker to fetch a frame for inference.
+      - local:    jpeg_url is the relative path under storage_local_path.
+      - supabase: jpeg_url is "{bucket}/{relative_path}".
+    """
+    if settings.storage_backend == "supabase":
+        from supabase import create_client
+
+        supabase = create_client(settings.supabase_url, settings.supabase_service_key)
+        bucket, _, relative = jpeg_url.partition("/")
+        return supabase.storage.from_(bucket).download(relative)
+
+    return (Path(settings.storage_local_path) / jpeg_url).read_bytes()
+
+
 async def _store_jpeg_supabase(relative_path: str, jpeg_bytes: bytes) -> str:
     """Upload JPEG to Supabase Storage. Returns the public URL."""
     from supabase import create_client

@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import settings
+from app.detection.service import run_detection_job
 from app.fusion.service import run_cluster_job, run_fit_job, run_fusion_job
 
 logger = logging.getLogger(__name__)
@@ -26,8 +27,13 @@ def start_scheduler(pool: asyncpg.Pool) -> None:
     global _scheduler
     if _scheduler is not None:
         return
-    if not (settings.fusion_enabled or settings.sensor_fit_enabled or settings.clustering_enabled):
-        logger.info("Fusion + fit + clustering jobs disabled; scheduler not started.")
+    if not (
+        settings.fusion_enabled
+        or settings.sensor_fit_enabled
+        or settings.clustering_enabled
+        or settings.detection_enabled
+    ):
+        logger.info("Fusion + fit + clustering + detection jobs disabled; scheduler not started.")
         return
 
     scheduler = AsyncIOScheduler(timezone="UTC")
@@ -65,11 +71,23 @@ def start_scheduler(pool: asyncpg.Pool) -> None:
             misfire_grace_time=120,
         )
 
+    if settings.detection_enabled:
+        scheduler.add_job(
+            run_detection_job,
+            trigger=IntervalTrigger(minutes=settings.detection_interval_minutes),
+            args=[pool],
+            id="detection",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+
     scheduler.start()
     _scheduler = scheduler
     logger.info(
-        "Scheduler started (fit=%s, fusion=%s, clustering=%s).",
-        settings.sensor_fit_enabled, settings.fusion_enabled, settings.clustering_enabled,
+        "Scheduler started (fit=%s, fusion=%s, clustering=%s, detection=%s).",
+        settings.sensor_fit_enabled, settings.fusion_enabled,
+        settings.clustering_enabled, settings.detection_enabled,
     )
 
 

@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.database import close_pool, create_pool, run_migrations, set_pool
 from app.fusion.scheduler import start_scheduler, stop_scheduler
-from app.routes import events, frames, health
+from app.routes import auth, events, frames, health, potholes
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,9 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(events.router)
 app.include_router(frames.router)
+app.include_router(potholes.router)
+app.include_router(auth.router)
+app.include_router(auth.well_known_router)
 
 
 # ── Global Exception Handler ──────────────────────────────────────────────────

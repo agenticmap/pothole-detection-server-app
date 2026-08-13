@@ -4,7 +4,9 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import Depends, Header, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.auth.tokens import StaffPrincipal, TokenError, decode_access_token
 from app.database import get_pool
 
 
@@ -48,7 +50,38 @@ async def require_version_v1(
     return accept_version.strip()
 
 
+# ── Staff auth (Phase 2.4) ────────────────────────────────────────────────────
+# auto_error=False so we can return a 401 with a WWW-Authenticate header rather
+# than FastAPI's default 403, and so this scheme never affects anonymous routes.
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+async def get_current_staff(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)] = None,
+) -> StaffPrincipal:
+    """Require a valid staff access token. Raises 401 otherwise.
+
+    Apply ONLY to staff routes (e.g. /potholes/detail). Routes that omit this
+    dependency stay anonymous — the device-ID-only contract is untouched.
+    """
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing bearer token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return decode_access_token(credentials.credentials)
+    except TokenError as e:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+
+
 # Type aliases for cleaner route signatures
 DbPool = Annotated[asyncpg.Pool, Depends(get_db_pool)]
 DeviceId = Annotated[str, Depends(require_device_id)]
 ApiVersion = Annotated[str, Depends(require_version_v1)]
+CurrentStaff = Annotated[StaffPrincipal, Depends(get_current_staff)]

@@ -20,6 +20,8 @@ dependencies = [
     "scipy>=1.15.0",
     "scikit-learn>=1.6.0",
     "joblib>=1.4.0",
+    "PyJWT[crypto]>=2.10.0",
+    "bcrypt>=4.2.0",
 ]
 
 [project.optional-dependencies]

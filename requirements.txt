@@ -15,6 +15,20 @@ scipy==1.15.1
 scikit-learn==1.6.1
 joblib==1.4.2
 
+# Server-side detection (Phase 2.3) — lazy-imported; only needed when DETECTION_BACKEND=onnx
+onnxruntime==1.20.1
+Pillow==11.1.0
+
+# Hybrid VLM verifier (Phase 2.3b) — all lazy-imported; install ONLY the one matching
+# VLM_BACKEND. local_http needs nothing extra (stdlib urllib). Left commented so the
+# base image stays lean; uncomment the backend you use.
+#   anthropic>=0.40.0       # VLM_BACKEND=claude
+#   google-genai>=0.3.0     # VLM_BACKEND=gemini
+
+# Auth — city-staff tier (Phase 2.4). RS256 needs the crypto extra; bcrypt for password hashing.
+PyJWT[crypto]==2.10.1
+bcrypt==4.2.1
+
 # Dev / Test
 pytest==8.3.4
 pytest-asyncio==0.24.0

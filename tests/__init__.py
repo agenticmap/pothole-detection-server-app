@@ -8,10 +8,11 @@ import pytest
 import pytest_asyncio
 
 # Set test environment variables BEFORE importing app modules.
-# DATABASE_URL uses setdefault so a real DB (e.g. docker-compose on :5433) can be
-# targeted by exporting DATABASE_URL before running pytest.
+# DATABASE_URL uses setdefault so a different DB can be targeted by exporting
+# DATABASE_URL before running pytest. The default matches this project's
+# docker-compose, which maps the PostGIS container to host port 5433.
 os.environ.setdefault(
-    "DATABASE_URL", "postgresql://pothole:pothole@localhost:5432/pothole_db"
+    "DATABASE_URL", "postgresql://pothole:pothole@localhost:5433/pothole_db"
 )
 os.environ["ENV"] = "development"
 os.environ["STORAGE_BACKEND"] = "local"

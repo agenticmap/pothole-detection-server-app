@@ -125,3 +125,38 @@ async def test_fusion_is_idempotent_and_deterministic(db_pool):
         )
     assert len(pairs) == 1  # upsert, not duplicate
     assert pairs[0]["fused_confidence"] == first["fused_confidence"]
+
+
+async def test_fusion_prefers_server_probability_over_device(db_pool):
+    # Phase 2.3: when a frame has a server_probability, fusion uses it (COALESCE)
+    # over the weaker on-device probability.
+    async with db_pool.acquire() as conn:
+        # Frame A: low device prob (0.1) but high SERVER prob (0.9).
+        await insert_frame(
+            conn, "fa", device_id="dva", ts="2026-05-27T10:30:00+00:00",
+            lat=43.10, lon=-79.10, device_probability=0.1,
+        )
+        await conn.execute("UPDATE asset_frame SET server_probability=0.9 WHERE client_id='fa'")
+        await insert_observation(
+            conn, "oa", device_id="dva", ts="2026-05-27T10:29:59.7+00:00",
+            lat=43.10, lon=-79.10, magnitude=6.0, accel_std=1.0, gbar_in_max=6.0,
+        )
+        # Frame B: same setup but only device prob (0.1), no server prob.
+        await insert_frame(
+            conn, "fb", device_id="dvb", ts="2026-05-27T10:30:00+00:00",
+            lat=43.20, lon=-79.20, device_probability=0.1,
+        )
+        await insert_observation(
+            conn, "ob", device_id="dvb", ts="2026-05-27T10:29:59.7+00:00",
+            lat=43.20, lon=-79.20, magnitude=6.0, accel_std=1.0, gbar_in_max=6.0,
+        )
+
+    await run_fusion_job(db_pool)
+
+    sql = "SELECT fused_confidence FROM fusion_pair WHERE frame_client_id=$1"
+    async with db_pool.acquire() as conn:
+        fa = await conn.fetchval(sql, "fa")
+        fb = await conn.fetchval(sql, "fb")
+
+    assert fa is not None and fb is not None
+    assert fa > fb  # identical sensor signal; A's stronger visual term wins

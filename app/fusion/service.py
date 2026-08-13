@@ -123,7 +123,7 @@ LIMIT $1
 
 _PAIRING_SQL = """
 WITH unprocessed AS (
-    SELECT client_id, device_id, ts_utc, geom, device_probability
+    SELECT client_id, device_id, ts_utc, geom, device_probability, server_probability
     FROM asset_frame
     WHERE client_id = ANY($1::text[])
 ),
@@ -131,7 +131,9 @@ candidates AS (
     SELECT
         f.client_id AS frame_client_id,
         o.client_id AS event_client_id,
-        f.device_probability AS visual_confidence,
+        -- Prefer the server detector's probability (Phase 2.3) when present;
+        -- fall back to the on-device probability for not-yet-detected frames.
+        COALESCE(f.server_probability, f.device_probability) AS visual_confidence,
         o.magnitude, o.accel_std, o.gbar_in_max, o.speed_mps,
         o.sensor_p_pothole, o.sensor_severity,
         (EXTRACT(EPOCH FROM (f.ts_utc - o.ts_utc)) * 1000)::bigint AS delta_ms,
