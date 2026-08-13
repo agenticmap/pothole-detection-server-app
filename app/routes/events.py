@@ -9,7 +9,8 @@ Wire format contract (frozen at v1):
 Idempotency:
   - INSERT ... ON CONFLICT (client_id) DO NOTHING
   - Both new inserts AND duplicate-skips appear in the `accepted` array
-  - The mobile client deletes its local Room row for every ID in `accepted`
+  - The mobile client marks its local Room row `uploaded = 1` for every ID in `accepted`
+    (it does NOT delete the row — local History and the map keep working offline)
 """
 
 import logging

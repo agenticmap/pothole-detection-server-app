@@ -28,7 +28,7 @@ cd server
 docker compose up -d
 ```
 
-This launches PostgreSQL 16 with PostGIS on `localhost:5432`. The migration SQL (`migrations/001_initial_schema.sql`) runs automatically on first boot via the `docker-entrypoint-initdb.d` volume mount.
+This launches PostgreSQL 16 with PostGIS on **`localhost:5433`** (compose maps host 5433 -> container 5432; the service is named `postgres`). The migration SQL (`migrations/001_initial_schema.sql`) runs automatically on first boot via the `docker-entrypoint-initdb.d` volume mount.
 
 ### 2. Create Python Environment
 
@@ -76,7 +76,7 @@ curl http://localhost:8000/health
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://pothole:pothole@localhost:5432/pothole_db` | PostgreSQL connection string |
+| `DATABASE_URL` | `postgresql://pothole:pothole@localhost:5433/pothole_db` | PostgreSQL connection string (note port **5433**) |
 | `DATABASE_USE_POOLER` | `false` | Set `true` for Supabase connection pooler (disables statement cache) |
 | `DATABASE_MIN_CONNECTIONS` | `5` | asyncpg pool minimum size |
 | `DATABASE_MAX_CONNECTIONS` | `20` | asyncpg pool maximum size |
@@ -442,7 +442,11 @@ The mobile client (`PotholeApi.java`, `UploadEventsWorker.java`) sends exactly t
 
 Key compatibility guarantees:
 - `Accept-Version: v1` header enforced on all ingestion endpoints
-- Partial batch acceptance: individual events can be rejected without failing the entire batch
+- Partial batch acceptance applies to **database** errors only: a row that fails to insert is
+  reported in `rejected` while the rest of the batch succeeds. **Schema violations behave
+  differently** — Pydantic validates `list[EventPayload]` as a whole, so one out-of-range field
+  returns 422 for the entire batch. Keep the field bounds wide enough that real data cannot trip
+  them; see `docs/road-test-readiness.md` §3.
 - Optional fields (absent vs null) handled correctly — Pydantic treats both as None
 - Duplicate uploads are idempotent (200 response, ID in `accepted`)
 - Client deletion logic: only IDs in `accepted` are deleted from local Room

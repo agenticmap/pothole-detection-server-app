@@ -1,13 +1,40 @@
 # Pothole Detection — Roadmap
 
+> ## ⚠️ Read this first — what this document is
+>
+> This is the **original multi-phase design**, written before the server existed. It is kept for
+> the reasoning behind each decision. It is **not** an implementation status report, and parts of
+> it have been overtaken by the code:
+>
+> - **§2.2's SQL is stale.** The shipped schema uses generic multi-asset naming —
+>   `asset_observation` / `asset_frame` / `asset_cluster` — not the `event` / `pothole_cluster`
+>   tables shown below. The authoritative schema is `migrations/001`–`006`.
+> - **Phase 2 is built, not "planned".** Ingestion, the ported sensor model, fusion, clustering,
+>   the public and staff read paths, and staff auth all exist. See the per-phase plan docs:
+>   [`phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md),
+>   [`phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md),
+>   [`phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md),
+>   [`phase-2.3-detection-plan.md`](./phase-2.3-detection-plan.md),
+>   [`phase-2.4-auth-plan.md`](./phase-2.4-auth-plan.md).
+> - **The fusion status blockquote below is stale** — it describes the app circa Phase 1.5.
+>   Server-side fusion runs today; the app assigns `visual_confirmed` / `frame_client_id` from the
+>   camera path; the app's GPS now lives in `location/LocationHub`, not `MapsActivity`.
+> - **The MATLAB methodology is fully ported to Python** (`app/fusion/matlab_port_v1.py`). There
+>   is no MATLAB in the pipeline and no gRPC sidecar — the engine is in-process and swappable
+>   behind `app/fusion/engine.py`.
+>
+> **For drive readiness, read [`road-test-readiness.md`](./road-test-readiness.md) instead** — it
+> is current as of 2026-08-12 and lists the blockers found and fixed before the first collection
+> drive.
+
 This document tracks the full multi-phase plan for the app. Shipped phases get a one-paragraph summary with a link to their dedicated changes doc. Future phases get the full design here so contributors know what's coming.
 
 | Phase | Status | What |
 | --- | --- | --- |
 | 1 | ✅ Shipped | Sensor-detection pipeline + Room buffer + WorkManager upload queue |
 | 1.5 | ✅ Shipped | UI/UX modernization + camera-detection plumbing |
-| 1.6 | 🚧 In progress | Real on-device YOLO + bounding-box overlay + server-fusion plumbing |
-| 2 | 📋 Planned | Server backend + sensor↔visual fusion + crowd clustering |
+| 1.6 | ✅ Shipped | Real on-device YOLO + bounding-box overlay + server-fusion plumbing |
+| 2 | ✅ Built (2.0–2.4) | Server backend + sensor↔visual fusion + crowd clustering + read path + staff auth |
 | 3 | 📋 Planned | On-device ML upgrade + labeled-data flywheel |
 | 4 | 📋 Planned | Production hardening + public release |
 
@@ -31,13 +58,13 @@ This document tracks the full multi-phase plan for the app. Shipped phases get a
 
 The original v1 update brought the app to modern Android: toolchain migration, leaked API-key rotation, dead-server stripping, then a Room-backed event store and a WorkManager upload queue. The detection algorithm itself (orientation-corrected linear-acceleration spikes with adaptive thresholding against a calibrated baseline) is byte-for-byte the same as the original research code.
 
-Full detail: [`docs/phase-1-changes.md`](./phase-1-changes.md).
+Full detail: the app repo's `docs/phase-1-changes.md`.
 
 ## Phase 1.5 — UI/UX + camera plumbing (shipped)
 
 Material 3 DayNight theme, single-screen map-first layout, a unified control-center dashboard with a `[Sensor | Camera | Both]` mode selector, split-view camera on the map, swipe-to-delete history with Undo, and search → Google Maps navigation handoff. Camera pipeline is fully wired (CameraX → throttled analyzer → Room → multipart upload) but gated by a stub classifier — every frame returns `p=0.5` until a real model is dropped in.
 
-Full detail: [`docs/phase-1.5-changes.md`](./phase-1.5-changes.md).
+Full detail: the app repo's `docs/phase-1.5-changes.md`.
 
 ## Phase 1.6 — Real on-device detection (in progress)
 
@@ -59,7 +86,7 @@ Replaces the stub classifier with a YOLOv8-nano pothole detector and surfaces li
 4. Fill in [`docs/model-attribution.md`](./model-attribution.md).
 5. Rebuild + install.
 
-After ship: [`docs/phase-1.6-changes.md`](./phase-1.6-changes.md) (to be written).
+After ship: the app repo's `docs/phase-1.6-changes.md` (to be written).
 
 ---
 
