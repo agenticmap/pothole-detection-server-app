@@ -87,8 +87,48 @@ async def get_current_staff(
         ) from e
 
 
+# Roles are ranked, not an allow-list: 'admin' outranks 'staff' outranks 'viewer'
+# (the set mirrors org_member's CHECK constraint in migrations/005_auth.sql). A rank
+# comparison can't develop the classic allow-list bug of forgetting to include admin.
+ROLE_RANK = {"viewer": 10, "staff": 20, "admin": 30}
+
+
+def require_min_role(minimum: str):
+    """Build a dependency requiring the staff principal to hold at least ``minimum``.
+
+    ``get_current_staff`` only proves the token is valid — every staff route is
+    otherwise equally open to a 'viewer'. The role already rides in the JWT
+    (app/auth/tokens.py), so this is a claim check, not a second DB round-trip.
+
+    Note the role is a *login-time snapshot*: app/auth/service.py reads org_member.role
+    only at login and refresh, so a demotion takes up to one access-token TTL to bite.
+    Re-querying here would add a DB round-trip to every tile request; that trade is
+    deliberate.
+
+    Returns 403 (authenticated but not permitted), never 401 — the caller proved who
+    they are, they just aren't allowed. An unknown or absent role ranks 0 and is
+    therefore denied, which matters because decode_access_token defaults role to "".
+    """
+    floor = ROLE_RANK[minimum]
+
+    async def _dependency(
+        staff: Annotated[StaffPrincipal, Depends(get_current_staff)],
+    ) -> StaffPrincipal:
+        if ROLE_RANK.get(staff.role, 0) < floor:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Requires the '{minimum}' role or higher.",
+            )
+        return staff
+
+    return _dependency
+
+
 # Type aliases for cleaner route signatures
 DbPool = Annotated[asyncpg.Pool, Depends(get_db_pool)]
 DeviceId = Annotated[str, Depends(require_device_id)]
 ApiVersion = Annotated[str, Depends(require_version_v1)]
 CurrentStaff = Annotated[StaffPrincipal, Depends(get_current_staff)]
+# Elevated tiers, used by the Phase 2.5 operator routes.
+StaffOrAbove = Annotated[StaffPrincipal, Depends(require_min_role("staff"))]
+AdminOnly = Annotated[StaffPrincipal, Depends(require_min_role("admin"))]
