@@ -1,3 +1,7 @@
+---
+updated: 2026-08-16
+---
+
 # Pothole Detection — Roadmap
 
 > ## ⚠️ Read this first — what this document is
@@ -8,14 +12,18 @@
 >
 > - **§2.2's SQL is stale.** The shipped schema uses generic multi-asset naming —
 >   `asset_observation` / `asset_frame` / `asset_cluster` — not the `event` / `pothole_cluster`
->   tables shown below. The authoritative schema is `migrations/001`–`006`.
+>   tables shown below. The authoritative schema is `migrations/001`–`008`.
 > - **Phase 2 is built, not "planned".** Ingestion, the ported sensor model, fusion, clustering,
->   the public and staff read paths, and staff auth all exist. See the per-phase plan docs:
+>   the public and staff read paths, staff auth, and the operator dashboard's server side all
+>   exist. See the per-phase plan docs:
 >   [`phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md),
 >   [`phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md),
 >   [`phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md),
 >   [`phase-2.3-detection-plan.md`](./phase-2.3-detection-plan.md),
->   [`phase-2.4-auth-plan.md`](./phase-2.4-auth-plan.md).
+>   [`phase-2.4-auth-plan.md`](./phase-2.4-auth-plan.md),
+>   [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
+> - **§2.9's admin surface is superseded.** It proposed Supabase Studio for repair marking;
+>   `POST /api/v1/clusters/{id}/repair` now does it with an audit trail (Phase 2.5).
 > - **The fusion status blockquote below is stale** — it describes the app circa Phase 1.5.
 >   Server-side fusion runs today; the app assigns `visual_confirmed` / `frame_client_id` from the
 >   camera path; the app's GPS now lives in `location/LocationHub`, not `MapsActivity`.
@@ -35,6 +43,7 @@ This document tracks the full multi-phase plan for the app. Shipped phases get a
 | 1.5 | ✅ Shipped | UI/UX modernization + camera-detection plumbing |
 | 1.6 | ✅ Shipped | Real on-device YOLO + bounding-box overlay + server-fusion plumbing |
 | 2 | ✅ Built (2.0–2.4) | Server backend + sensor↔visual fusion + crowd clustering + read path + staff auth |
+| 2.5 | 🟡 Server side built | Operator dashboard: vector tiles, detail panel, repair marking. Browser frontend not started. |
 | 3 | 📋 Planned | On-device ML upgrade + labeled-data flywheel |
 | 4 | 📋 Planned | Production hardening + public release |
 
@@ -94,7 +103,7 @@ After ship: the app repo's `docs/phase-1.6-changes.md` (to be written).
 
 Goal: stand up the backend so events + frames stop accumulating forever, run server-side ML on uploaded frames, run the sensor↔visual fusion job whose contract was locked in Phase 1.6, cluster crowd-sourced points into confirmed potholes, and serve them back to the app.
 
-> **Phase 2.0 (ingestion server) is shipped.** **Phase 2.1 — Sensor Classification + Fusion Engine v1 is now implemented** (see [`docs/phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md)). The original 2017 MATLAB accelerometer classifier (k-means++ → GMM → Gaussian-NB) was ported server-side as a self-bootstrapping `sensor_model`; its `P(pothole)` feeds a logit-space sigmoid fusion with the camera's on-device probability (this §2.4). An Isolation-Forest outlier gate and an IRI-style severity output were added. Jobs run in-process via APScheduler. **Phase 2.2 — the crowd clustering job (§2.5 below) is now implemented** (see [`docs/phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md)): a third APScheduler job runs PostGIS `ST_ClusterDBSCAN` over recent high-confidence detections (sensor potholes + fused pairs) and upserts repair-safe `asset_cluster` rows. **Phase 2.2b — the read path (§2.6 below) is now implemented** (see [`docs/phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md)): a public, zoom-aware `GET /api/v1/potholes?bbox&zoom` endpoint serves the repair-filtered clusters back to the app (which renders them as map markers, §2.7). **Phase 2.3 — the server-side detection model (§2.3 below) is now implemented** (see [`docs/phase-2.3-detection-plan.md`](./phase-2.3-detection-plan.md)): a pluggable inference worker (in-process ONNX, or external HTTP) runs a bigger YOLO on uploaded frames, populates `asset_frame.server_*`, feeds the stronger visual signal into fusion via `COALESCE(server_probability, device_probability)`, and logs device↔server disagreement. Ships gated off (`DETECTION_ENABLED`) until a model is supplied. **Phase 2.3b** extends this with a `hybrid` backend — the Stage-1 detector plus a pluggable VLM verifier (Claude / Gemini / local) that confirms only ambiguous frames to cut false positives; the rationale and design are in [`docs/detection-approach.md`](./detection-approach.md). For what it takes to run a real on-road test of the full loop, see [`docs/road-test-readiness.md`](./road-test-readiness.md).
+> **Phase 2.0 (ingestion server) is shipped.** **Phase 2.1 — Sensor Classification + Fusion Engine v1 is now implemented** (see [`docs/phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md)). The original 2017 MATLAB accelerometer classifier (k-means++ → GMM → Gaussian-NB) was ported server-side as a self-bootstrapping `sensor_model`; its `P(pothole)` feeds a logit-space sigmoid fusion with the camera's on-device probability (this §2.4). An Isolation-Forest outlier gate and an IRI-style severity output were added. Jobs run in-process via APScheduler. **Phase 2.2 — the crowd clustering job (§2.5 below) is now implemented** (see [`docs/phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md)): a third APScheduler job runs PostGIS `ST_ClusterDBSCAN` over recent high-confidence detections (sensor potholes + fused pairs) and upserts repair-safe `asset_cluster` rows. **Phase 2.2b — the read path (§2.6 below) is now implemented** (see [`docs/phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md)): a public, zoom-aware `GET /api/v1/potholes?bbox&zoom` endpoint serves the repair-filtered clusters back to the app (which renders them as map markers, §2.7). **Phase 2.3 — the server-side detection model (§2.3 below) is now implemented** (see [`docs/phase-2.3-detection-plan.md`](./phase-2.3-detection-plan.md)): a pluggable inference worker (in-process ONNX, or external HTTP) runs a bigger YOLO on uploaded frames, populates `asset_frame.server_*`, feeds the stronger visual signal into fusion via `COALESCE(server_probability, device_probability)`, and logs device↔server disagreement. Ships gated off (`DETECTION_ENABLED`) until a model is supplied. **Phase 2.3b** extends this with a `hybrid` backend — the Stage-1 detector plus a pluggable VLM verifier (Claude / Gemini / local) that confirms only ambiguous frames to cut false positives; the rationale and design are in [`docs/detection-approach.md`](./detection-approach.md). **Phase 2.4 — the city-staff auth tier** (see [`docs/phase-2.4-auth-plan.md`](./phase-2.4-auth-plan.md)) split the read path into a public locations-only tier and a staff detail tier behind RS256 bearer tokens. **Phase 2.5 — the operator dashboard's server side is now implemented** (see [`docs/phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md)): staff-gated `ST_AsMVT` vector tiles for the map, a cluster detail endpoint (members, paired frames, repair history), authenticated frame image serving, and `POST /api/v1/clusters/{id}/repair` — the first write path to `asset_cluster` outside the clustering job, audited in a new `repair_log` table. The browser frontend is not started. For what it takes to run a real on-road test of the full loop, see [`docs/road-test-readiness.md`](./road-test-readiness.md).
 
 ### 2.1 Backend choice
 
@@ -238,12 +247,25 @@ Response 200:
 
 ### 2.8 Rate limiting + abuse
 
+> **Partly stale.** The per-device limits shipped at **5000/hour** (a drive's buffered data
+> drains in one burst — see `road-test-readiness.md`), and the limiter is in-memory per
+> worker, not table-backed. Per-IP rules, the storage budget, frame GC and shadow-ban are all
+> still unimplemented; they are the bulk of Phase 2.6.
+
 - Per-device: 100 events/hour + 100 frames/hour, enforced via a `rate_limit` table or RLS function. 429 on excess.
 - Per-IP: Cloudflare in front of Supabase, default rule "100 requests/minute per IP".
 - Storage budget: 500 MB JPEGs per device. Older frames GC'd after 90 days; raw events kept indefinitely.
 - Shadow-ban for pathological clusters (e.g., all detections in 5×5 m).
 
 ### 2.9 Admin surface
+
+> **Superseded by Phase 2.5.** Repair marking is now
+> `POST /api/v1/clusters/{cluster_id}/repair` (staff-gated, audited in `repair_log`), not
+> direct SQL — there is no Supabase Studio in this deployment, and hand-editing `repaired_at`
+> on a live database was the only option before. The "v2 dashboard" below is being built as
+> the operator dashboard (MapLibre rather than Next.js); its server side is done, the browser
+> frontend is not. See [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
+> Bulk shadow-ban and manual `verified` cluster creation remain unimplemented.
 
 Phase 2 v1: **Supabase Studio**. Direct SQL for repair updates, bulk shadow-ban, manual `verified` cluster creation.
 

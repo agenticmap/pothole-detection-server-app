@@ -1,3 +1,7 @@
+---
+updated: 2026-08-16
+---
+
 # Enterprise Architecture & Development Plan
 ## Pothole Detection → Municipal Asset Tracking Platform
 
@@ -325,19 +329,30 @@ This roadmap **extends** [`docs/roadmap.md`](./roadmap.md); it does not replace 
 
 ### 4.1 Master timeline
 
+> **⚠️ Numbering corrected 2026-08-16.** This table originally called the operator dashboard
+> "P2.3" and pilot deployment "P2.4", which **collide with the phases the code actually
+> shipped** — 2.3 is the server-side detection model and 2.4 is the staff auth tier. The code
+> is authoritative. The dashboard is **2.5** and pilot deployment is **2.7**; the rows below
+> are renumbered accordingly, and the section headings §4.5/§4.6 keep their old numbers only
+> as anchors. The Status column was also stale — everything through 2.5 was still marked
+> "Planned" long after it shipped.
+
 | Phase | Where described | Track | Status | Duration |
 |---|---|---|---|---|
-| **P1.6 ✱** | `roadmap.md` §"Phase 1.6" | Mobile | In progress | (existing) |
-| **P2.0 — Schema freeze + ingestion server** | This doc §4.2; refines `roadmap.md` §2.1–§2.2, §2.6 | Server | Planned | 2–3 weeks |
-| **P2.1 — Fusion engine v1 (MATLAB port)** | This doc §4.3 (new) | Server / ML | Planned, gated on MATLAB review | 2–3 weeks |
-| **P2.2 — Clustering + read API** | This doc §4.4; refines `roadmap.md` §2.5–§2.6 | Server | Planned | 1–2 weeks |
-| **P2.3 — Operator dashboard MVP** | This doc §4.5 (new) | Web | Planned | 3–4 weeks |
-| **P2.4 — Pilot deployment** | This doc §4.6 (new) | Ops | Planned | 2 weeks |
-| **P3 ✱** | `roadmap.md` §"Phase 3" | Mobile | Planned | (existing) |
+| **P1.6 ✱** | `roadmap.md` §"Phase 1.6" | Mobile | ✅ Shipped | (existing) |
+| **P2.0 — Schema freeze + ingestion server** | This doc §4.2; refines `roadmap.md` §2.1–§2.2, §2.6 | Server | ✅ Shipped | 2–3 weeks |
+| **P2.1 — Fusion engine v1 (MATLAB port)** | This doc §4.3 (new) | Server / ML | ✅ Shipped — `phase-2.1-fusion-engine-plan.md` | 2–3 weeks |
+| **P2.2 — Clustering + read API** | This doc §4.4; refines `roadmap.md` §2.5–§2.6 | Server | ✅ Shipped — `phase-2.2-clustering-plan.md`, `phase-2.2b-read-path-plan.md` | 1–2 weeks |
+| **P2.3 — Server-side detection model** | `roadmap.md` §2.3 | Server / ML | ✅ Shipped (gated off) — `phase-2.3-detection-plan.md` | — |
+| **P2.4 — City-staff auth tier** | `phase-2.4-auth-plan.md` | Server | ✅ Shipped | — |
+| **P2.5 — Operator dashboard MVP** | This doc §4.5 (was "P2.3") | Web + Server | 🟡 Server side shipped — `phase-2.5-dashboard-plan.md`; frontend not started | 3–4 weeks |
+| **P2.6 — Production hardening** | `roadmap.md` §2.8–2.10 + `road-test-readiness.md` "Known gaps" | Server / Ops | 📋 Planned | — |
+| **P2.7 — Pilot deployment** | This doc §4.6 (was "P2.4") | Ops | 📋 Planned | 2 weeks |
+| **P3 ✱** | `roadmap.md` §"Phase 3" | Mobile | 📋 Planned | (existing) |
 | **P3.5 — Fusion engine v2 (refined weights, async retraining)** | This doc §4.7 (new) | ML | Rolling | rolling |
-| **P4 ✱** | `roadmap.md` §"Phase 4" | Mobile + Ops | Planned | (existing) |
+| **P4 ✱** | `roadmap.md` §"Phase 4" | Mobile + Ops | 📋 Planned | (existing) |
 | **P4.5 — Enterprise deployment** | This doc §4.8 (new) | Platform | Per-customer | per-contract |
-| **P5 — Multi-asset expansion** | This doc §4.9 (new) | Mobile + Server | Planned | 6+ months |
+| **P5 — Multi-asset expansion** | This doc §4.9 (new) | Mobile + Server | 📋 Planned | 6+ months |
 
 ✱ = unchanged from existing roadmap.
 
@@ -418,21 +433,36 @@ The API layer never calls into MATLAB directly. The fusion engine is an internal
 - Generic `asset_cluster` naming (carryover from §4.2).
 - Materialized views per zoom band (§3.3).
 
-### 4.5 Phase 2.3 — Operator dashboard MVP (3–4 weeks)
+### 4.5 Phase 2.5 — Operator dashboard MVP (3–4 weeks)
+
+> **Status: server side shipped**, browser frontend not started. As-built and the deviations
+> from Section 3 (FastAPI `ST_AsMVT` instead of Martin, no materialized views, no CDN, no
+> WebSocket yet) are recorded in [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
+> Phase numbered 2.5, not 2.3 — see the note on §4.1.
 
 Build the GIS dashboard per Section 3.
 
 **Scope cuts for MVP**
-- Read-only. No repair marking via UI; admins use Supabase Studio or direct SQL.
+- ~~Read-only. No repair marking via UI; admins use Supabase Studio or direct SQL.~~
+  **Changed:** repair marking ships with the dashboard as
+  `POST /api/v1/clusters/{id}/repair` (staff-gated, audited in `repair_log`). There is no
+  Supabase Studio in this deployment, so the alternative was hand-editing `repaired_at` on a
+  live database.
 - Single-municipality scope (filtering UI exists, but auth model is "all operators see all data").
+  **Still true, and now load-bearing:** `asset_cluster` has no `org_id`, so any staff member of
+  any org can repair any city's clusters.
 - Desktop-first; mobile-responsive is nice-to-have, not required.
 
 **Exit criteria**
 - Operator pans/zooms a city, sees clusters, clicks for details, sees member frames.
+  *(Server side done; needs the frontend.)*
 - p95 tile fetch < 250 ms on a residential connection.
+  *(Server side measured at p95 27 ms for z14 and 81 ms for aggregated z10 on 20k clusters.)*
 - Live "new cluster appeared" toast within 8 s of server-side detection in pilot data.
+  *(Deferred. Clustering only runs every 15 minutes, so a sub-8-second push target is largely
+  theatre; `updated_at` polling is the honest MVP and the index for it already exists.)*
 
-### 4.6 Phase 2.4 — Pilot deployment (2 weeks)
+### 4.6 Phase 2.7 — Pilot deployment (2 weeks)
 
 **Objectives**
 - Identify one municipality willing to pilot. Realistic entry points:

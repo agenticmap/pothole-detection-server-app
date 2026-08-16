@@ -1,3 +1,7 @@
+---
+updated: 2026-08-16
+---
+
 # Phase 2.4 — City-staff auth tier (server side)
 
 > Status: **Implemented** (server side). App side in progress in the mobile repo.
@@ -55,7 +59,19 @@ municipality requires their own IdP.
 Empty private key in `development` → ephemeral keypair (warns; tokens don't survive restart).
 Empty private key outside development → hard error (fail closed).
 
-## Provisioning a staff account (Phase 1, manual / admin)
+## Provisioning a staff account
+
+> **Superseded by Phase 2.5.** Use `scripts/create_staff.py` — it validates the email with the
+> same `EmailStr` the login route uses (otherwise you can create an account that can never log
+> in) and takes the password from `POTHOLE_STAFF_PASSWORD` or a prompt rather than `argv`.
+>
+> ```bash
+> POTHOLE_STAFF_PASSWORD='…' python scripts/create_staff.py \
+>     --org org_cambridge --name "City of Cambridge" \
+>     --email jane@cambridge.gov --role staff
+> ```
+
+The original manual recipe, kept for reference:
 
 ```sql
 INSERT INTO org (org_id, name) VALUES ('org_cambridge', 'City of Cambridge');
@@ -75,6 +91,17 @@ asserts detail fields are **absent**. Full suite: 86 passed.
 
 ## Out of scope (later)
 - OIDC/SSO issuer swap (Phase 2 of the staged path).
-- Per-municipality RLS data scoping (columns ready; policies not written).
-- Repair-management / export / raw-data staff entitlements.
+- Per-municipality RLS data scoping (columns ready; policies not written). **Now visible:**
+  `asset_cluster` has no `org_id`, so the Phase 2.5 repair endpoint lets any staff member of
+  any org mutate any city's clusters.
+- ~~Repair-management~~ **shipped in Phase 2.5** (`POST /api/v1/clusters/{id}/repair`).
+  Export / raw-data staff entitlements are still unbuilt.
 - Timing-uniform login (verify hash even for missing users).
+
+## Follow-ups landed in Phase 2.5
+
+`get_current_staff` proved a token was valid but **no route ever consulted `staff.role`** —
+every staff route was equally open to a `viewer`. Phase 2.5 added `require_min_role` (ranked,
+fail-closed) and, for write endpoints, `require_min_role_live`, which re-reads
+`org_member.role` because the JWT's role is a login-time snapshot that stays stale for up to
+`auth_access_token_ttl_minutes`. See [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).

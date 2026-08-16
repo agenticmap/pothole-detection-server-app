@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-13
+updated: 2026-08-16
 ---
 
 # Road-Test Readiness
@@ -191,6 +191,22 @@ Also confirm the JPEGs are on disk under `storage/frames/<device-id>/`, and chec
 `accuracy_m` and `accel_max_g = 78.5` (a value the old bounds rejected) was accepted and
 persisted, and a filename-less multipart frame upload inserted a row and wrote its JPEG to disk.
 Test rows were removed afterwards so they do not pollute the sensor-model fit.
+
+## Since this was written (2026-08-16)
+
+- **A security bug was found and fixed** that this document's audit missed:
+  `X-Device-Id: ../../..` escaped the frame storage root, because neither `device_id` nor
+  `client_id` was charset-validated before being interpolated into
+  `"{device_id}/{client_id}.jpg"`. Since ingestion is anonymous, that was a live
+  unauthenticated write primitive. Fixed at three layers; see
+  [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md). Not a wire break — the client
+  sends UUIDs.
+- **Tests no longer run against the drive database.** The `db_pool` fixture TRUNCATEs every
+  table and used to default to `pothole_db`, so a stray `pytest` would have destroyed
+  collected drive data. It now targets `pothole_test` behind an allow-list guard. One-time
+  setup: `docker compose exec postgres createdb -U pothole pothole_test`.
+- **Repair marking no longer needs raw SQL** — `POST /api/v1/clusters/{id}/repair`, audited.
+- Test count is now **206**, not the 105 quoted below.
 
 ## Known gaps (not blocking a drive)
 
