@@ -103,8 +103,15 @@ async def _store_jpeg(device_id: str, client_id: str, jpeg_bytes: bytes) -> str:
 
 def _store_jpeg_local(relative_path: str, jpeg_bytes: bytes) -> str:
     """Store JPEG to local filesystem. Returns the relative path as the URL."""
-    storage_root = Path(settings.storage_local_path)
-    file_path = storage_root / relative_path
+    storage_root = Path(settings.storage_local_path).resolve()
+    file_path = (storage_root / relative_path).resolve()
+
+    # Belt-and-braces containment check. device_id and client_id are charset-validated
+    # upstream (app/dependencies.py::SAFE_ID, FrameMetadata.client_id), but this path is
+    # built by string interpolation, so verify the result rather than trusting the inputs:
+    # a "../.." device id would otherwise write anywhere the process can reach.
+    if not file_path.is_relative_to(storage_root):
+        raise ValueError("Refusing to write a frame outside the storage root.")
 
     # Create device directory if needed
     file_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,10 +1,12 @@
 """Shared test fixtures — re-exported from tests/__init__.py for clarity."""
 
 from datetime import datetime
+from urllib.parse import urlsplit
 
 import pytest
 import pytest_asyncio
 
+from app.config import settings
 from app.database import create_pool, run_migrations
 from tests import (  # noqa: F401
     MINIMAL_JPEG,
@@ -14,6 +16,16 @@ from tests import (  # noqa: F401
     make_valid_frame_metadata,
 )
 
+# This fixture TRUNCATEs every table, so it must never point at a working database.
+# Guard on the database name rather than trusting whoever set DATABASE_URL: an
+# accidental `pytest` against the dev DB silently destroys collected drive data,
+# which is unrecoverable. See docker-compose.yml's `pothole_test` database.
+_ALLOWED_TEST_DATABASES = frozenset({"pothole_test", "pothole_ci"})
+
+
+def _database_name(dsn: str) -> str:
+    return urlsplit(dsn).path.lstrip("/")
+
 
 @pytest_asyncio.fixture
 async def db_pool():
@@ -22,10 +34,22 @@ async def db_pool():
     Skips the test if a local Postgres isn't reachable (so unit tests still run
     in environments without a database).
     """
+    db_name = _database_name(settings.database_url)
+    if db_name not in _ALLOWED_TEST_DATABASES:
+        pytest.fail(
+            f"Refusing to run destructive tests against database {db_name!r}. "
+            f"These fixtures TRUNCATE every table. Point DATABASE_URL at one of "
+            f"{sorted(_ALLOWED_TEST_DATABASES)}, e.g.\n"
+            f"  DATABASE_URL=postgresql://pothole:pothole@localhost:5433/pothole_test pytest"
+        )
     try:
         pool = await create_pool()
     except Exception as e:  # noqa: BLE001 — any connection failure → skip
-        pytest.skip(f"Postgres not available: {e}")
+        pytest.skip(
+            f"Postgres not available: {e}\n"
+            f"If {db_name!r} does not exist yet, create it once with:\n"
+            f"  docker compose exec postgres createdb -U pothole {db_name}"
+        )
     await run_migrations(pool)
     # Clean slate for fusion/sensor tables so tests are independent.
     async with pool.acquire() as conn:

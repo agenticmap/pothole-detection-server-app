@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.auth.tokens import StaffPrincipal, TokenError, decode_access_token
 from app.database import get_pool
+from app.validators import is_safe_id
 
 
 def get_db_pool() -> asyncpg.Pool:
@@ -27,7 +28,13 @@ async def require_device_id(
             status_code=400,
             detail="Missing required header: X-Device-Id",
         )
-    return x_device_id.strip()
+    device_id = x_device_id.strip()
+    if not is_safe_id(device_id):
+        raise HTTPException(
+            status_code=400,
+            detail="X-Device-Id must be 1-64 chars of [A-Za-z0-9._-].",
+        )
+    return device_id
 
 
 async def require_version_v1(

@@ -11,8 +11,12 @@ import pytest_asyncio
 # DATABASE_URL uses setdefault so a different DB can be targeted by exporting
 # DATABASE_URL before running pytest. The default matches this project's
 # docker-compose, which maps the PostGIS container to host port 5433.
+#
+# Note the database is `pothole_test`, NOT the dev `pothole_db`: the db_pool
+# fixture TRUNCATEs every table, and pointing it at the dev database destroys
+# collected drive data. conftest.py enforces this with an allow-list.
 os.environ.setdefault(
-    "DATABASE_URL", "postgresql://pothole:pothole@localhost:5433/pothole_db"
+    "DATABASE_URL", "postgresql://pothole:pothole@localhost:5433/pothole_test"
 )
 os.environ["ENV"] = "development"
 os.environ["STORAGE_BACKEND"] = "local"

@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.validators import is_safe_id
+
 
 class FrameMetadata(BaseModel):
     """Metadata JSON part of the multipart frame upload.
@@ -9,6 +11,8 @@ class FrameMetadata(BaseModel):
     Field names match the mobile client's PotholeApi.java multipart construction.
     """
 
+    # Charset-constrained because client_id becomes a path segment in the frame
+    # storage layout ("<device_id>/<client_id>.jpg"); see app/validators.py.
     client_id: str = Field(..., min_length=1, max_length=64)
     event_client_id: str | None = Field(
         default=None,
@@ -33,6 +37,18 @@ class FrameMetadata(BaseModel):
         default=None,
         description="Array of YOLO detection objects from on-device inference.",
     )
+
+    @field_validator("client_id")
+    @classmethod
+    def validate_client_id(cls, v: str) -> str:
+        """Reject ids that could traverse out of the frame storage directory.
+
+        Not a Field(pattern=...) because excluding the bare '.' / '..' segments
+        needs look-around, which Pydantic v2's Rust regex engine lacks.
+        """
+        if not is_safe_id(v):
+            raise ValueError("client_id must be 1-64 chars of [A-Za-z0-9._-], not '.' or '..'")
+        return v
 
     @field_validator("ts")
     @classmethod
