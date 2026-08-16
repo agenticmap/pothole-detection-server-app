@@ -129,6 +129,9 @@ DbPool = Annotated[asyncpg.Pool, Depends(get_db_pool)]
 DeviceId = Annotated[str, Depends(require_device_id)]
 ApiVersion = Annotated[str, Depends(require_version_v1)]
 CurrentStaff = Annotated[StaffPrincipal, Depends(get_current_staff)]
-# Elevated tiers, used by the Phase 2.5 operator routes.
+# Explicit role tiers for the Phase 2.5 operator routes. ViewerOrAbove is stricter
+# than CurrentStaff despite 'viewer' being the lowest role: CurrentStaff accepts any
+# valid token, including one whose role claim is absent or unrecognised.
+ViewerOrAbove = Annotated[StaffPrincipal, Depends(require_min_role("viewer"))]
 StaffOrAbove = Annotated[StaffPrincipal, Depends(require_min_role("staff"))]
 AdminOnly = Annotated[StaffPrincipal, Depends(require_min_role("admin"))]

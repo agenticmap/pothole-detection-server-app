@@ -84,6 +84,24 @@ class Settings(BaseSettings):
     cluster_member_min_confidence: float = 0.5     # fused_confidence floor for pair members
     cluster_min_distinct_devices: int = 2          # below this → not public (read-path filter)
 
+    # ── Operator dashboard vector tiles (Phase 2.5) ─────────────────────────────
+    # At or below this zoom a tile is grid-aggregated. Measured on 20k synthetic
+    # clusters over one city: an unaggregated z10 tile returned all 20k features in
+    # 425 ms (over the 250 ms p95 ceiling); the same tile aggregated took 89 ms.
+    tile_aggregate_max_zoom: int = 12
+    # Raw observation points are only meaningful street-level, and an unbounded
+    # low-zoom request would scan the largest table in the schema.
+    tile_observations_min_zoom: int = 15
+    tile_max_features: int = 4000              # per-tile cap; bounds payload + encode time
+    tile_extent: int = 4096                    # MVT coordinate space (the de-facto standard)
+    tile_buffer: int = 64                      # px of bleed so edge symbols render whole
+    tile_aggregate_bins: int = 32              # grid cells across a tile when aggregating
+    # Tile queries share the asyncpg pool with ingestion, and MapLibre fans out 4-8
+    # requests per pan. Without a ceiling a slow tile starves POST /api/v1/events.
+    tile_max_concurrency: int = 6
+    tile_query_timeout_seconds: float = 2.0    # fail fast rather than hold a connection
+    tile_cache_seconds: int = 60               # Cache-Control max-age (private: authenticated)
+
     # ── Server-side detection model (Phase 2.3) ─────────────────────────────────
     detection_enabled: bool = False                # gated off until a model is configured
     detection_backend: str = "none"                # "none" | "onnx" | "http" | "hybrid"

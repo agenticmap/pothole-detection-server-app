@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.database import close_pool, create_pool, run_migrations, set_pool
 from app.fusion.scheduler import start_scheduler, stop_scheduler
-from app.routes import auth, events, frames, health, potholes
+from app.routes import auth, events, frames, health, potholes, tiles
 
 # Uvicorn only configures its own `uvicorn.*` loggers, leaving the root logger at
 # WARNING — which silently discarded every logger.info() in this app, including
@@ -74,6 +74,7 @@ app.include_router(frames.router)
 app.include_router(potholes.router)
 app.include_router(auth.router)
 app.include_router(auth.well_known_router)
+app.include_router(tiles.router)
 
 
 # ── Global Exception Handler ──────────────────────────────────────────────────
