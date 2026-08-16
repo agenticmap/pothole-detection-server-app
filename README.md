@@ -304,13 +304,23 @@ SELECT PostGIS_Full_Version();
 
 ## Running Tests
 
+> **The DB-backed fixtures TRUNCATE every table.** They run against a dedicated
+> `pothole_test` database, never the `pothole_db` you collect drive data into.
+> `tests/conftest.py` enforces this with an allow-list and fails loudly if
+> `DATABASE_URL` points anywhere else — so an accidental `pytest` can't destroy a drive.
+
 ```bash
-# Validation tests (no database required)
+# One-time: create the test database (the container's init script only runs on
+# first boot, so an existing volume needs this by hand).
+docker compose up -d
+docker compose exec postgres createdb -U pothole pothole_test
+
+# Validation tests (no database required — DB tests skip)
 pytest tests/ -v
 
-# With database running (full integration tests)
-docker compose up -d
-pytest tests/ -v
+# Full suite. tests/__init__.py defaults DATABASE_URL to pothole_test, so no
+# environment variable is needed; export it only to target a different database.
+pytest -q
 ```
 
 ---
