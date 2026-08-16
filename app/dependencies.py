@@ -124,6 +124,41 @@ def require_min_role(minimum: str):
     return _dependency
 
 
+def require_min_role_live(minimum: str):
+    """Like require_min_role, but re-reads the role from org_member.
+
+    For WRITE endpoints only. The JWT's role is a login-time snapshot, so a
+    demotion takes up to auth_access_token_ttl_minutes (30) to take effect. That
+    staleness is an acceptable trade for reads — the alternative is a DB
+    round-trip in front of every tile — but a mutation is a different risk class,
+    and one extra query on a rare, high-consequence action is cheap.
+
+    Denies if the membership has disappeared entirely (user removed from the org),
+    which the claim check alone cannot detect.
+    """
+    floor = ROLE_RANK[minimum]
+
+    async def _dependency(
+        pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+        staff: Annotated[StaffPrincipal, Depends(get_current_staff)],
+    ) -> StaffPrincipal:
+        async with pool.acquire() as conn:
+            role = await conn.fetchval(
+                "SELECT role FROM org_member WHERE user_id = $1 AND org_id = $2",
+                staff.user_id,
+                staff.org_id,
+            )
+        if role is None or ROLE_RANK.get(role, 0) < floor:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Requires the '{minimum}' role or higher.",
+            )
+        # Carry the freshly-read role, so anything downstream sees current truth.
+        return StaffPrincipal(user_id=staff.user_id, org_id=staff.org_id, role=role)
+
+    return _dependency
+
+
 # Type aliases for cleaner route signatures
 DbPool = Annotated[asyncpg.Pool, Depends(get_db_pool)]
 DeviceId = Annotated[str, Depends(require_device_id)]
@@ -135,3 +170,5 @@ CurrentStaff = Annotated[StaffPrincipal, Depends(get_current_staff)]
 ViewerOrAbove = Annotated[StaffPrincipal, Depends(require_min_role("viewer"))]
 StaffOrAbove = Annotated[StaffPrincipal, Depends(require_min_role("staff"))]
 AdminOnly = Annotated[StaffPrincipal, Depends(require_min_role("admin"))]
+# Write tier — verifies the role against the database rather than the token claim.
+StaffOrAboveLive = Annotated[StaffPrincipal, Depends(require_min_role_live("staff"))]

@@ -124,21 +124,55 @@ def _store_jpeg_local(relative_path: str, jpeg_bytes: bytes) -> str:
     return relative_path
 
 
+def resolve_local_frame_path(jpeg_url: str) -> Path:
+    """Resolve a stored jpeg_url to an absolute local path, or refuse it.
+
+    ``jpeg_url`` is an unconstrained TEXT column. Rows are written by
+    ``_store_jpeg_local`` today, but a bad or legacy row must not become an
+    authenticated arbitrary-file read once frames are served over HTTP, so the
+    containment check lives here — the single resolver both the detection worker
+    and the image route go through.
+
+    Raises ValueError if the path escapes the storage root.
+    """
+    storage_root = Path(settings.storage_local_path).resolve()
+    file_path = (storage_root / jpeg_url).resolve()
+    if not file_path.is_relative_to(storage_root):
+        raise ValueError("Refusing to read a frame outside the storage root.")
+    return file_path
+
+
 async def load_frame_bytes(jpeg_url: str) -> bytes:
     """Read a stored JPEG back by its stored url/path — inverse of _store_jpeg.
 
     Used by the detection worker to fetch a frame for inference.
       - local:    jpeg_url is the relative path under storage_local_path.
       - supabase: jpeg_url is "{bucket}/{relative_path}".
+
+    Note both branches block: read_bytes() and the supabase client are
+    synchronous. That is fine for the batched detection worker, which runs one
+    frame at a time off the request path. Per-request callers must not use this
+    directly — see app/routes/clusters.py, which serves local files with
+    FileResponse and offloads the supabase branch to a thread.
     """
     if settings.storage_backend == "supabase":
-        from supabase import create_client
+        return download_frame_bytes_supabase(jpeg_url)
 
-        supabase = create_client(settings.supabase_url, settings.supabase_service_key)
-        bucket, _, relative = jpeg_url.partition("/")
-        return supabase.storage.from_(bucket).download(relative)
+    return resolve_local_frame_path(jpeg_url).read_bytes()
 
-    return (Path(settings.storage_local_path) / jpeg_url).read_bytes()
+
+def download_frame_bytes_supabase(jpeg_url: str) -> bytes:
+    """Fetch a frame from Supabase storage. Fully synchronous, by nature.
+
+    Split out so a request-path caller can hand it to a worker thread — the
+    supabase client has no async API, and a network round trip on the event loop
+    stalls every other request.
+    """
+    from supabase import create_client
+
+    supabase = create_client(settings.supabase_url, settings.supabase_service_key)
+    bucket, _, relative = jpeg_url.partition("/")
+    return supabase.storage.from_(bucket).download(relative)
 
 
 async def _store_jpeg_supabase(relative_path: str, jpeg_bytes: bytes) -> str:

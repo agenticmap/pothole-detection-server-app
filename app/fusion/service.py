@@ -437,6 +437,47 @@ _UPDATE_CLUSTER_RUN_SQL = """
 UPDATE cluster_run SET completed_at = now(), outputs_count = $2 WHERE run_id = $1
 """
 
+# Guard against resurrecting a defect that was repaired *while this run was
+# computing*. _MEMBERS_CTE filters out members already explained by a repair, but
+# it is evaluated by _CLUSTER_SQL before the write transaction opens, so a repair
+# committed in between leaves those members in the computed result while
+# _FIND_EXISTING_SQL (WHERE repaired_at IS NULL) no longer matches the cluster
+# they came from — and the row would be re-inserted as a brand new, un-repaired
+# cluster containing exactly the observations an operator just closed out.
+#
+# Checking at insert time closes that window regardless of statement ordering
+# (READ COMMITTED re-snapshots per statement, so simply widening the transaction
+# would not). It also guards against device clock skew: repaired_at is server
+# time while last_seen derives from the device-supplied ts_utc.
+# $1=lon $2=lat $3=eps_m $4=last_seen
+_FIND_REPAIRED_COVERING_SQL = """
+SELECT cluster_id FROM asset_cluster
+WHERE repaired_at IS NOT NULL
+  AND repaired_at >= $4
+  AND ST_DWithin(centroid, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+LIMIT 1
+"""
+
+
+async def _compute_clusters(conn, *, window, min_conf, eps_m, min_points):
+    """Run the member gate + DBSCAN. Returns (rows, n_members, mean_lat, eps_units).
+
+    Separated from the write phase so a test can interpose between the two and
+    reproduce the repair-mid-run race deterministically.
+    """
+    stats = await conn.fetchrow(_MEMBER_STATS_SQL, window, min_conf, eps_m)
+    n_members = stats["n"] or 0
+    if n_members < min_points:
+        return None, n_members, None, None
+
+    # Web-Mercator distorts distance by 1/cos(lat); scale eps so the planar
+    # threshold corresponds to eps_m ground meters at this latitude.
+    mean_lat = float(stats["mean_lat"])
+    eps_units = eps_m / max(math.cos(math.radians(mean_lat)), 1e-6)
+
+    clusters = await conn.fetch(_CLUSTER_SQL, window, min_conf, eps_m, eps_units, min_points)
+    return clusters, n_members, mean_lat, eps_units
+
 
 async def run_cluster_job(pool: asyncpg.Pool) -> int:
     """Cluster recent high-confidence detections into asset_cluster (Phase 2.2).
@@ -455,23 +496,16 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
             eps_m = settings.cluster_eps_m
             min_points = settings.cluster_min_points
 
-            stats = await conn.fetchrow(_MEMBER_STATS_SQL, window, min_conf, eps_m)
-            n_members = stats["n"] or 0
-            if n_members < min_points:
+            clusters, n_members, mean_lat, eps_units = await _compute_clusters(
+                conn, window=window, min_conf=min_conf, eps_m=eps_m, min_points=min_points
+            )
+            if clusters is None:
                 logger.info("Cluster gate not met: %d members (< %d).", n_members, min_points)
                 return 0
 
-            # Web-Mercator distorts distance by 1/cos(lat); scale eps so the
-            # planar threshold corresponds to eps_m ground meters at this latitude.
-            mean_lat = float(stats["mean_lat"])
-            eps_units = eps_m / max(math.cos(math.radians(mean_lat)), 1e-6)
-
-            clusters = await conn.fetch(
-                _CLUSTER_SQL, window, min_conf, eps_m, eps_units, min_points
-            )
-
             run_id = uuid4().hex
             matched: list[str] = []
+            skipped = 0
             async with conn.transaction():
                 await conn.execute(
                     _INSERT_CLUSTER_RUN_SQL,
@@ -502,6 +536,19 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                             c["distinct_devices"], c["last_seen"],
                         )
                     else:
+                        # Re-check for a repair that landed while this run was
+                        # computing; without it the members an operator just closed
+                        # out would come straight back as a new, un-repaired cluster.
+                        covered_by = await conn.fetchval(
+                            _FIND_REPAIRED_COVERING_SQL, lon, lat, eps_m, c["last_seen"]
+                        )
+                        if covered_by is not None:
+                            logger.info(
+                                "Skipping insert at (%.6f, %.6f): covered by repaired "
+                                "cluster %s.", lon, lat, covered_by,
+                            )
+                            skipped += 1
+                            continue
                         cluster_id = "clu_" + uuid4().hex
                         await conn.execute(
                             _INSERT_CLUSTER_SQL, cluster_id, lon, lat,
@@ -514,10 +561,12 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                     for mid, mc in zip(c["member_ids"], c["member_confidences"]):
                         await conn.execute(_INSERT_LINK_SQL, cluster_id, mid, mc)
 
-                await conn.execute(_UPDATE_CLUSTER_RUN_SQL, run_id, len(clusters))
+                written = len(clusters) - skipped
+                await conn.execute(_UPDATE_CLUSTER_RUN_SQL, run_id, written)
             logger.info(
-                "Cluster run %s: %d members → %d clusters.", run_id, n_members, len(clusters)
+                "Cluster run %s: %d members → %d clusters (%d skipped as repaired).",
+                run_id, n_members, written, skipped,
             )
-            return len(clusters)
+            return written
         finally:
             await conn.execute("SELECT pg_advisory_unlock($1)", _CLUSTER_LOCK_KEY)

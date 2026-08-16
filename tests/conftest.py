@@ -54,7 +54,7 @@ async def db_pool():
     # Clean slate for fusion/sensor tables so tests are independent.
     async with pool.acquire() as conn:
         await conn.execute(
-            "TRUNCATE refresh_token, org_member, staff_user, org, "
+            "TRUNCATE repair_log, refresh_token, org_member, staff_user, org, "
             "observation_cluster_link, asset_cluster, cluster_run, "
             "model_disagreement, fusion_pair, fusion_run, sensor_model, "
             "asset_frame, asset_observation RESTART IDENTITY CASCADE"
