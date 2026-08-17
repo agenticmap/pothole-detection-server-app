@@ -1,0 +1,106 @@
+/* Design tokens — semantic names only.
+ *
+ * Components must never reference a raw hex. Dark mode and per-municipality
+ * white-labelling are then a matter of redefining this block, not touching
+ * component code.
+ *
+ * Light-first on purpose: basemaps are light, municipal offices are bright, and
+ * these views get printed.
+ */
+
+:root {
+  /* ── Surfaces & text ─────────────────────────────────────────────────── */
+  --color-canvas: #f1f5f9;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f8fafc;
+  --color-surface-hover: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-border-strong: #cbd5e1;
+
+  --color-text: #0f172a;
+  --color-text-muted: #475569;
+  --color-text-subtle: #64748b;
+  --color-text-inverse: #ffffff;
+
+  /* ── Interactive ─────────────────────────────────────────────────────── */
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-subtle: #eff6ff;
+  --color-focus: #2563eb;
+
+  /* Destructive is reserved for destructive actions. It is deliberately NOT
+   * part of the severity ramp: if the ramp's red also means "error", neither
+   * signal means anything. */
+  --color-danger: #dc2626;
+  --color-success: #15803d;
+
+  /* ── Severity ramp ───────────────────────────────────────────────────────
+   * Severity is ORDINAL, so it gets a sequential ramp, not red/amber/green.
+   * RAG is the category cliché and the worst case for the commonest colour
+   * vision deficiency. This is a ColorBrewer YlOrRd-family ramp: it contains no
+   * green at all (so red/green confusion cannot arise) and is monotonic in
+   * lightness (so it still reads correctly under CVD simulation, and in the
+   * greyscale printout a works crew actually carries).
+   *
+   * Colour is never the only channel — marker radius also scales with severity
+   * and the panel prints the number. */
+  --severity-1: #fed976; /* lightest — least severe */
+  --severity-2: #feb24c;
+  --severity-3: #fc4e2a;
+  --severity-4: #b10026; /* darkest — most severe */
+  --severity-unknown: #94a3b8;
+
+  /* Repaired sits deliberately OFF the ramp. A repaired defect is a different
+   * kind of thing, not a low severity. */
+  --color-repaired: #64748b;
+
+  --marker-halo: #ffffff;
+
+  /* ── Spacing — dense operator console, 4px rhythm ────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ── Shape & elevation ───────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
+  --shadow-md: 0 2px 8px rgb(15 23 42 / 0.1);
+  --shadow-lg: 0 8px 24px rgb(15 23 42 / 0.12);
+
+  /* ── Layout ──────────────────────────────────────────────────────────── */
+  --rail-width: 56px;
+  --topbar-height: 56px;
+  --panel-width: 400px;
+
+  /* ── Type ────────────────────────────────────────────────────────────── */
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Monospace ONLY for identifiers and coordinates, where character
+   * disambiguation matters (clu_a4f… / lat-lon). Never for prose or headings. */
+  --font-mono: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --z-panel: 20;
+  --z-overlay: 40;
+  --z-modal: 100;
+}
+
+/* Motion is functional here, never decorative — so when the user asks for less
+ * of it, there is nothing to preserve. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms;
+    --duration-base: 0ms;
+  }
+}

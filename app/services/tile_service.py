@@ -124,6 +124,11 @@ FROM (
       AND ($6::boolean OR c.repaired_at IS NULL)
       AND c.last_seen >= now() - make_interval(days => $7)
       AND ($8::double precision IS NULL OR c.severity >= $8)
+    -- Ordered so the per-tile cap truncates deterministically. Without it, which
+    -- clusters survive LIMIT is whatever the planner returns, and markers pop in
+    -- and out between pans at the same zoom. Worst-first also means a truncated
+    -- tile keeps the clusters an operator most needs to see.
+    ORDER BY c.severity DESC NULLS LAST, c.cluster_id
     LIMIT $9
 ) AS t
 WHERE t.geom IS NOT NULL

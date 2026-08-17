@@ -33,3 +33,8 @@ test_storage/
 # Distribution
 dist/
 *.egg-info/
+
+# Dashboard frontend (Phase 2.5)
+node_modules/
+*.tsbuildinfo
+.env.local

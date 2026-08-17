@@ -7,11 +7,20 @@ Staff-only. These carry the severity/confidence detail that Phase 2.4 gated
 behind authentication, so they sit at the same tier as /potholes/detail — not on
 the anonymous public path.
 
-Auth note for the client: MapLibre attaches the bearer token via its
-`transformRequest` hook. That hook is *synchronous* and cannot await a token
-refresh, so the dashboard must keep a valid access token in hand at all times
-(refresh on a timer against POST /api/v1/auth/refresh). MapLibre's failure mode
-on a 401 is a silently blank tile, with no retry and no console error.
+Auth note for the client: a bearer token is required, and how it gets attached
+matters. MapLibre's `transformRequest` hook only *shapes* a request — it never
+sees the response, so a 401 leaves the tile in `state = 'errored'`, and an
+errored tile never retries itself. Refreshing the token afterwards would leave
+the map blank until something forced a reload.
+
+The dashboard therefore registers a custom protocol (`addProtocol`) that owns
+the fetch, so it can see the 401, refresh, and retry inline. See
+dashboard/src/map/tile-protocol.ts.
+
+(An earlier version of this note claimed `transformRequest` is synchronous. It
+is not — the type is `(url, resourceType?) => RequestParameters |
+Promise<RequestParameters> | undefined` since MapLibre 5.21. The advice to
+refresh proactively still holds; the stated reason did not.)
 """
 
 import logging

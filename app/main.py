@@ -2,10 +2,12 @@
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.database import close_pool, create_pool, run_migrations, set_pool
@@ -76,6 +78,35 @@ app.include_router(auth.router)
 app.include_router(auth.well_known_router)
 app.include_router(tiles.router)
 app.include_router(clusters.router)
+
+
+# ── Operator dashboard (Phase 2.5) ────────────────────────────────────────────
+# Mounted AFTER the routers: Starlette matches in registration order, so the API
+# always wins. A prefixed mount rather than "/" so there is no chance of shadowing
+# /api/v1/*, /health or /.well-known/jwks.json.
+#
+# The isdir() guard is load-bearing, not defensive habit: StaticFiles raises
+# RuntimeError from its constructor when the directory is missing, and this module
+# is imported by the test suite — an unbuilt frontend would fail all tests and stop
+# the container booting. A server without a dashboard should simply not serve one.
+_dashboard_dist = Path(settings.dashboard_dist_path)
+if not _dashboard_dist.is_absolute():
+    # Relative to the repo root, not the CWD — uvicorn is not always launched there.
+    _dashboard_dist = Path(__file__).resolve().parent.parent / _dashboard_dist
+
+if _dashboard_dist.is_dir():
+    app.mount(
+        "/dashboard",
+        StaticFiles(directory=str(_dashboard_dist), html=True),
+        name="dashboard",
+    )
+    logger.info("Operator dashboard mounted at /dashboard from %s", _dashboard_dist)
+else:
+    logger.info(
+        "No dashboard bundle at %s — /dashboard not mounted. "
+        "Build it with: cd dashboard && npm install && npm run build",
+        _dashboard_dist,
+    )
 
 
 # ── Global Exception Handler ──────────────────────────────────────────────────

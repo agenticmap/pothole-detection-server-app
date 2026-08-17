@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     cluster_member_min_confidence: float = 0.5     # fused_confidence floor for pair members
     cluster_min_distinct_devices: int = 2          # below this → not public (read-path filter)
 
+    # ── Operator dashboard frontend (Phase 2.5) ─────────────────────────────────
+    # Built bundle, mounted at /dashboard when present. Relative paths resolve
+    # against the repo root, not the CWD — uvicorn is not always launched from it.
+    dashboard_dist_path: str = "dashboard/dist"
+
     # ── Operator dashboard vector tiles (Phase 2.5) ─────────────────────────────
     # At or below this zoom a tile is grid-aggregated. Measured on 20k synthetic
     # clusters over one city: an unaggregated z10 tile returned all 20k features in
