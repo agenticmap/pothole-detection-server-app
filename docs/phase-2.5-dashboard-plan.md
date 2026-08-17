@@ -1,11 +1,16 @@
 ---
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
-# Phase 2.5 — Operator dashboard (server side)
+# Phase 2.5 — Operator dashboard
 
-> Status: **Steps 1–2 implemented** (vector tiles + detail panel + repair marking).
-> Steps 3–4 (the browser frontend and live push) are **not started**.
+> Status: **Steps 1–3 implemented** — vector tiles, detail panel + repair marking, and the
+> browser frontend. Step 4 (live WebSocket push) is **not started** and is arguably not worth
+> starting; see "Out of scope / next".
+>
+> Commits: `e75d15f` groundwork · `461ad04` step 1 · `1086e4a` step 2 · `5ad6d1a` step 3.
+> Plus `d232031`, a security fix found along the way that is not part of the dashboard.
+>
 > Superseded numbering: `enterprise-architecture-plan.md` §4.1 calls this "P2.3", which
 > collides with the shipped Phase 2.3 (server detection). It is 2.5 here and in the code.
 
@@ -17,8 +22,23 @@ JSON endpoint that no human-facing surface consumed. The operator dashboard
 (`enterprise-architecture-plan.md` §3) is the surface the whole enterprise plan aims at, and
 it was the largest missing deliverable.
 
-This phase builds the **server side** of it: vector tiles for the map, a detail panel payload,
-and the first write path to `asset_cluster` outside the clustering job.
+This phase builds it end to end: vector tiles for the map, a detail-panel payload, the first
+write path to `asset_cluster` outside the clustering job, and a browser console that an
+operator actually uses.
+
+## The loop this completes
+
+```
+phone (sensor + camera)  →  POST /events + /frames
+   →  fusion (5 min)  →  clustering (15 min)  →  asset_cluster
+   →  GET /tiles/clusters/{z}/{x}/{y}.mvt   →  operator sees it on a map
+   →  click  →  GET /clusters/{id}          →  members, frames, history
+   →  POST /clusters/{id}/repair            →  repaired, audited, off the map
+```
+
+Before this phase the chain stopped at `asset_cluster`. `repaired_at` had no write path
+anywhere in `app/` — the roadmap assumed an admin would edit it in Supabase Studio, which does
+not exist in this deployment.
 
 ## What landed
 
@@ -73,6 +93,115 @@ and the first write path to `asset_cluster` outside the clustering job.
 - **`migrations/008_repair_log.sql`** — the repair audit trail.
 - **`app/fusion/service.py`** — `_compute_clusters` extracted, and a repaired-covering guard
   before `_INSERT_CLUSTER_SQL` (see "The race", below).
+
+### Step 3 — Browser frontend (`dashboard/`)
+
+Vite 8 + TypeScript + MapLibre GL JS 6.4, **no framework**. ~1,700 lines of TS and ~760 of
+CSS across 15 modules. Scope is the core loop only: sign in → map → click a marker → detail
+panel with frames → mark repaired. Filters, an inventory list and work orders are not built,
+but the shell has a defined slot for each.
+
+| Module | Responsibility |
+|---|---|
+| `src/main.ts` | Bootstrap; login screen ↔ app shell; WebGL2 support gate |
+| `src/auth.ts` | Token lifecycle, single-flight refresh, role claim, error-envelope normalisation |
+| `src/api.ts` | Authenticated fetch wrapper; 401 → refresh → retry once |
+| `src/types.ts` | Hand-written mirrors of `app/models/clusters.py` |
+| `src/dom.ts` | `el()` / `field()` / `plural()` — textContent only, no `innerHTML` anywhere |
+| `src/severity.ts` | The ordinal ramp: colour + radius + label, one source of truth |
+| `src/shell.ts` | Top bar, asset-type selector, module rail, legend, URL state |
+| `src/map/map.ts` | MapLibre init, source, click handling, optimistic repaint |
+| `src/map/tile-auth.ts` | `transformRequest` + 401 recovery |
+| `src/map/layers.ts` | The two style layers and their paint expressions |
+| `src/map/basemap.ts` | Raster OSM style — the single swap point for PMTiles |
+| `src/panel/panel.ts` | Detail panel; owns the per-open `AbortController` |
+| `src/panel/frames.ts` | Blob-URL image loading with a client-side concurrency cap |
+| `src/tokens.css` | Semantic design tokens (surfaces, severity ramp, spacing, type) |
+| `src/styles.css` | Shell layout and components |
+
+Server-side change is limited to `app/main.py` (a guarded `StaticFiles` mount at
+`/dashboard`) and `app/config.py` (`dashboard_dist_path`). No endpoint was added or altered
+for the frontend — a useful signal that the step-1/2 contracts were right.
+
+## The UI/UX design
+
+Researched against the products this competes with: **vialytics** (a UX Design Award winner in
+this exact category), **Cartegraph + Esri ArcGIS** pavement dashboards, and Esri's
+cartographic guidance. They converge on a map-first console driving
+**Collect → Assess → Prioritise → Act → Track**.
+
+### Layout — three-zone map-first console
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  ◆ RoadWatch   [ Potholes ▾ ]                usr_ops · Sign out  │ 56px
+├────┬────────────────────────────────────────────┬────────────────┤
+│ M  │                                            │  clu_a4f…   ×  │
+│ I  │                MAP (fills)                 │  Open · Mod 2.2│
+│ W  │                                            │  Corroboration │
+│ R  │                                            │  [frames]      │
+│ A  │      ┌────────┐                            │  [observations]│
+│    │      │ legend │                            │  [Mark fixed]  │
+└────┴──────┴────────┴────────────────────────────┴────────────────┘
+  56px rail                                         400px panel
+```
+
+- **Module rail** — Map · Inventory · Work orders · Reports · Admin. Only Map is live; the
+  rest render **disabled with tooltips**. This is the deliberate part: the competitor set says
+  work orders and trend-over-time come next, and reserving the slots now means adding them is
+  additive rather than a re-layout.
+- **Asset-type selector** in the top bar, not a hardcoded "Potholes". The tile and detail
+  endpoints already take `asset_type`, so Phase 5's multi-asset expansion is a registry entry
+  plus an icon. Sign/streetlight/crosswalk options are present and disabled.
+- **Detail panel** 400px, slides in on selection; becomes a bottom sheet under 1024px.
+- **Legend always visible**, not behind a control. A ramp an operator has to go looking for is
+  a ramp they will misread.
+
+### Severity encoding — the most consequential visual decision
+
+**Severity is ordinal, so it gets a sequential ramp, not red-amber-green.** RAG is the
+category cliché and it is the worst case for the commonest colour-vision deficiency. The ramp
+is ColorBrewer `YlOrRd`-family:
+
+| Tier | Token | Hex | Relative luminance |
+|---|---|---|---|
+| Low (≥ 0) | `--severity-1` | `#fed976` | 0.720 |
+| Moderate (≥ 1.5) | `--severity-2` | `#feb24c` | 0.534 |
+| High (≥ 3) | `--severity-3` | `#fc4e2a` | 0.263 |
+| Severe (≥ 5) | `--severity-4` | `#b10026` | 0.095 |
+
+Two properties were **measured in the browser, not assumed**: it contains no green at all (so
+red/green confusion cannot arise), and it is strictly monotonic in luminance — which is what
+makes it survive CVD simulation *and* the greyscale printout a works crew actually carries.
+
+**Colour is never the only channel.** Marker radius also scales with severity (5→11px), and
+the panel prints the tier label *and* the number ("Moderate · 2.2"). **Repaired** sits
+deliberately off the ramp — slate, half opacity — because a repaired defect is a different
+kind of thing, not a low severity. Markers carry a 1.5px white halo so they stay legible over
+both pale roads and dark parkland.
+
+Tier boundaries are a first cut against `asset_cluster.severity` (an IRI-style figure from
+`app/sensor_model`) and **should be recalibrated against real drive data before a pilot**.
+
+### Tokens and type
+
+Everything is a semantic CSS custom property in `src/tokens.css` — `--color-surface`,
+`--severity-3`, `--space-4` — never a raw hex in a component. Dark mode and per-municipality
+white-labelling are then a redefinition of that one block. Light-first, because basemaps are
+light, municipal offices are bright, and these views get printed.
+
+Neutral slate chrome so the map carries the colour; one blue (`#2563eb`) for interactive;
+red reserved for destructive and **excluded from the severity ramp** — if the ramp's red also
+meant "error", neither signal would mean anything.
+
+Type is **Inter** with `font-variant-numeric: tabular-nums` on every metric so figures don't
+jitter between rows, and a monospace face **only** for identifiers and coordinates.
+
+> The `ui-ux-pro-max` design tool was consulted and its palette/density guidance used. Its
+> *style* recommendation — "Exaggerated Minimalism", stated fit "fashion, architecture,
+> portfolios, luxury brands, editorial", with `clamp(3rem, 10vw, 12rem)` display type — was
+> **discarded** as wrong for a data-dense operator console. Recorded so the divergence reads
+> as a decision rather than an oversight.
 
 ## Decisions worth keeping
 
@@ -249,6 +378,141 @@ handler in `app/main.py` turns into a **500**. The route therefore stats the pat
 `text/plain` for a path without a `.jpg` suffix) and `filename=` is deliberately omitted (it
 would flip `content_disposition_type` to `attachment` and download instead of render).
 
+### Tile auth: `transformRequest`, after `addProtocol` was tried and failed
+
+The plan called for MapLibre's `addProtocol`, on the reasoning that it owns the fetch and can
+therefore see a 401 and retry inline. **It does not work for vector tiles here.** MapLibre 6
+loads them in a Web Worker, and a protocol registered on the main thread is never consulted:
+tiles sat in `state: 'loading'` indefinitely, with **no error, no console warning, and zero
+network requests**. It was confirmed to be MapLibre's worker rather than this code by adding
+MapLibre's own public demo vector source at runtime — which hung identically. (Registering in
+the worker via `importScriptInWorkers` would work, but the access token lives on the main
+thread and would have to be shipped into the worker on every refresh.)
+
+`transformRequest` works because it runs on the **main thread** while the tile URL is being
+built, and its headers travel with the request into the worker. Two rules make it safe:
+
+1. **Return a plain object synchronously for anything that is not our API.** The hook applies
+   to *every* resource type including the raster basemap, and an `async` function returns a
+   Promise on every call — putting the basemap onto the awaited code path, which had two
+   abort-related bugs fixed as recently as MapLibre 6.1. Only `/api/v1/` takes the async
+   branch, and only when no cached token is in hand.
+2. **Match on the `/api/v1/` pathname, not the origin.** In dev the API origin *is* the
+   dashboard origin (Vite proxy), so an origin test would attach the bearer to `index.html`
+   and every static asset.
+
+`transformRequest` cannot see responses, and **an errored tile never retries itself** — so a
+401 would leave a permanently blank map even after a successful refresh. Recovery is
+explicit: `map.on('error')` → if `AJAXError.status === 401` → `refreshNow()` → `setTiles()`
+with a bumped version to force a refetch.
+
+### Tiles are requested with `include_repaired=true`
+
+Not an oversight. With the default filter, marking a cluster repaired makes its marker vanish
+from under the operator's own open panel — leaving a detail panel for something no longer on
+the map and **no route back to un-repair it**, even though the API supports exactly that.
+Repaired clusters are fetched and styled distinctly instead. `min_devices=0` likewise, because
+the single-device triage queue is what an operator wants and what the public path hides.
+
+### Optimistic repaint via feature state, not a tile reload
+
+After a repair the marker repaints immediately from `setFeatureState`, using
+`promoteId: {clusters: 'cluster_id'}` (needed because `cluster_id` is TEXT, so MVT carries no
+numeric feature id). Feature state is **discarded by `setTiles`**, so the two mechanisms are
+alternatives, not a pair — the optimistic path is used for repair, and `setTiles` is reserved
+for the asset-type switch and 401 recovery.
+
+Worth knowing: `Cache-Control: max-age=60` on tiles means MapLibre re-fetches every visible
+tile every 60 seconds anyway, so the map is self-healing regardless; the optimistic update is
+about immediacy, not correctness.
+
+### Source `maxzoom` is 14 — deliberately, and it is a trap in both directions
+
+MapLibre's default is 22, which would request a fresh tile from PostGIS at *every* integer
+zoom up to 22. At 14 it fetches real tiles to z14 and overzooms (client-side slices the
+parent) above, halving request count at street zooms while keeping feature properties intact
+so clicks still work.
+
+It must stay **above** `tile_aggregate_max_zoom` (12). Setting it to 12 would overzoom the
+*aggregated* tiles forever and individual clusters would never appear at any zoom.
+
+### Every numeric `get` is wrapped in `coalesce`
+
+`ST_AsMVT` **omits NULL attributes from a tile entirely** — the key is simply absent from the
+feature — and `asset_cluster.severity` is nullable. A bare `['get','severity']` therefore
+feeds null into a `step` expression and MapLibre raises a render-time expression error, which
+surfaces as console spam and miscoloured markers rather than an obvious failure. The sentinel
+is `-1` so a missing value lands below the first tier and paints as "unrated", not "low".
+
+### Two style layers over one source
+
+The source's feature schema changes with zoom, so the layers are separated by filter:
+`['has','point_count']` for aggregated bins, `['!', ['has','point_count']]` for individual
+clusters. MapLibre filters are per-feature, so a mixed source is fine.
+
+Both schemas can be on screen briefly — MapLibre renders a scaled parent tile until the child
+loads, so crossing z12→z13 shows aggregate bubbles at z13 for a moment. The click handler
+therefore binds to the individual layer *and* still guards on `cluster_id` being a string.
+
+Aggregate counts are encoded by **radius, not a numeric label**, because the style declares no
+`glyphs` URL — a `text-field` without one is a style-validation failure and the numbers
+silently never render. Adding labels later means self-hosting one font range.
+
+### Tokens are memory-only; refresh is single-flight
+
+The access token lives in a module variable and the refresh token **is not persisted at all**.
+`sessionStorage` was rejected because it is copied into a duplicated tab (Ctrl-click), where
+both tabs would rotate the same rotating credential and a single-flight guard cannot reach.
+Memory-only also caps what an XSS can steal at a ≤30-minute access token rather than a 30-day
+refresh token. The cost is re-login after a page reload, acceptable for a single-sitting
+triage tool.
+
+Refresh is **single-flight** — one shared in-flight promise all callers await — because
+`app/auth/service.py` revokes the presented token *before* issuing the new pair and there is
+no reuse detection, so two concurrent refreshes would destroy the session. A caller that loses
+the race and finds the token has since changed reuses the winner's token rather than logging
+out.
+
+### `Accept-Version: v1` on `/auth/*` only
+
+`login` and `refresh` take the `ApiVersion` dependency and **400** without the header; the
+tile and cluster routes deliberately do not (the dashboard ships with the server and is not
+the versioned mobile client). Omitting it yields a 400, not a 401, which is easy to
+misdiagnose as a body-validation problem.
+
+### No `innerHTML`, anywhere
+
+`src/dom.ts` builds elements with `textContent` and has **no escape hatch**, on purpose: the
+repair note is operator free text up to 2,000 characters that the API echoes back in
+`repair_history[].note` alongside `user_email`. Template-string `innerHTML` in a vanilla
+implementation is precisely how that becomes stored XSS.
+
+### One `AbortController` per panel open
+
+Clicking marker A then quickly marker B would otherwise let A's detail request and its image
+fetches resolve *after* B rendered — producing B's header with A's frames — and the
+revoke-on-close cleanup never fires because the panel never closed. Every `open()` aborts the
+previous one.
+
+### Frame images: fetch + blob URL, capped at 3 concurrent
+
+`<img src>` **cannot send an `Authorization` header**, so bytes come through `fetch` and become
+object URLs, revoked as soon as the image decodes (the response is
+`private, max-age=86400, immutable`, so nothing is re-fetched). Concurrency is capped at 3
+client-side because the server's image route is guarded by a `Semaphore(6)` shared across
+*all* users — firing 12 at once would queue behind whoever else has a panel open.
+
+### URL-driven state
+
+`#/asset=pothole&z=16.00&lat=…&lon=…&cluster=clu_x`. An operator can send a colleague a link
+to the exact defect, and the panel is bookmarkable. The hash needs no server support, which is
+why there is no SPA catch-all route to get wrong — a catch-all that failed to exclude `/api`
+would turn every API 404 into `200 text/html` and make the fetch wrapper try to parse
+`<!doctype html>`.
+
+**Known limitation:** state is read on load only; there is no `hashchange` listener, so
+browser back/forward does not restore a previous view within a live session.
+
 ## Security fix found during this phase (not part of the dashboard)
 
 **Unauthenticated path traversal in frame storage** — `d232031`. Frame JPEGs are stored at
@@ -278,19 +542,63 @@ Not a v1 wire break: the Android client sends `UUID.randomUUID().toString()` for
 | `tile_max_concurrency` | `6` | shared by tile + image routes |
 | `tile_query_timeout_seconds` | `2.0` | fail fast rather than hold a connection |
 | `tile_cache_seconds` | `60` | tile `Cache-Control: private, max-age=` |
+| `dashboard_dist_path` | `dashboard/dist` | built bundle; relative resolves against the repo root |
 
 Detail-panel bounds are module constants in `cluster_detail_service.py`: `MAX_MEMBERS` 200,
-`MAX_FRAMES` 12, `MAX_REPAIR_HISTORY` 20.
+`MAX_FRAMES` 12, `MAX_REPAIR_HISTORY` 20. Frontend constants live in `src/map/map.ts`
+(`AGGREGATE_MAX_ZOOM` 12, `SOURCE_MAX_ZOOM` 14) and `src/severity.ts` (tier boundaries).
 
-## Provisioning a staff account
+Frontend build-time env (all optional, `VITE_`-prefixed): `VITE_MAP_LAT` / `VITE_MAP_LON` /
+`VITE_MAP_ZOOM` for the initial view — there is **no extent endpoint**, so the starting view
+is configured rather than discovered — and `VITE_API_TARGET` for the dev proxy.
+
+### `AUTH_JWT_PRIVATE_KEY_PEM` is now effectively required
+
+Left empty, `app/auth/keys.py` mints an **ephemeral keypair per process**. Two consequences,
+the second of which is nasty: every `--reload` invalidates all tokens, and because the
+Dockerfile runs `uvicorn --workers 2` and `get_key_material` is `@lru_cache`d *per process*,
+each worker signs with a **different key** — a token minted by worker 1 fails validation on
+worker 2, producing intermittent 401s that look exactly like a client bug.
+
+`.env.example` now documents it with a generation command. Generate with
+`openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048` (PKCS#8, matching what
+`keys.py` produces itself); `_normalize_pem` accepts literal `\n` escapes so it fits on one
+`.env` line. Outside `ENV=development` the server already refuses to start without it.
+
+## Running it
 
 ```bash
+# 1. Database
+docker compose up -d
+
+# 2. Provision an operator (CLI, not an endpoint — there is no self-signup)
 POTHOLE_STAFF_PASSWORD='…' python scripts/create_staff.py \
     --org org_cambridge --name "City of Cambridge" \
     --email jane@cambridge.gov --role staff
+
+# 3. Build the dashboard
+cd dashboard && npm install && npm run build && cd ..
+
+# 4. Serve. ENV must stay `development` or migrations never run.
+uvicorn app.main:app --reload --port 8000
+#    → http://127.0.0.1:8000/dashboard/
 ```
 
-Supersedes the manual `INSERT` recipe in `phase-2.4-auth-plan.md`.
+For frontend work, run Vite instead and get HMR — both dev and prod are then same-origin, so
+there is no `OPTIONS` preflight per tile URL:
+
+```bash
+cd dashboard && VITE_API_TARGET=http://127.0.0.1:8000 npm run dev
+#    → http://localhost:5173/dashboard/
+```
+
+Roles: `viewer` sees everything but no repair control; `staff` and `admin` can mark repairs.
+The provisioning CLI supersedes the manual `INSERT` recipe in `phase-2.4-auth-plan.md`.
+
+**The bundle is not in the Docker image.** The Dockerfile copies only `app/` and
+`migrations/`, so a container serves no dashboard — the mount is skipped and logged. Shipping
+it needs a `node:22` build stage, a `COPY --from`, and a `.dockerignore` for `node_modules`;
+that belongs with deployment (Phase 2.7), not here.
 
 ## Tests
 
@@ -325,12 +633,58 @@ trusting whoever set `DATABASE_URL`, because the action is unrecoverable.
 One-time setup on an existing volume:
 `docker compose exec postgres createdb -U pothole pothole_test`.
 
-## A bug worth remembering
+### Frontend verification — driven in a real browser
 
-`x` and `y` in the tile routes initially shared **one** FastAPI `Path()` instance. FastAPI
-sets the alias on the object it is handed, so the second parameter overwrote the first's
-binding and both read the same path segment — the endpoint returned a valid, empty,
-**wrong** tile with a 200 rather than erroring. Each parameter now gets its own instance.
+There are no automated frontend tests; step 3 was verified with Playwright against a seeded
+`pothole_test` and a provisioned account. What was confirmed:
+
+- **Sign-in**, and a wrong password rendering as `Invalid credentials.` rather than
+  `[object Object]` — the API has *three* error-envelope shapes (`{"detail": str}`,
+  `{"detail": [...]}` for 422, `{"error":…, "detail":…}` for 500).
+- **Deep links** restoring map centre/zoom (scale bar 50 m at z16) and reopening the panel.
+- **Detail panel** — badges, tabular fields, per-cluster `device_ref` labels (three
+  observations from one device correctly all show "A").
+- **Frame images** decoding at 640×480 from `blob:` URLs — the `<img src>` auth workaround.
+- **Repair** writing through to `asset_cluster.repaired_at` **and** a `repair_log` row with
+  `user_id`/`org_id`, flipping the badge to "Repaired" and the button to "Reopen defect", and
+  appending the history entry.
+- **Role gating** — a `viewer` sees full detail but no repair control, with an explanation.
+- **Severity ramp** measured in-page as monotonic in luminance.
+
+**What could NOT be verified: marker rendering.** MapLibre's Web Worker stalls in this
+headless environment — it accepts messages and never answers (16 pending actor callbacks), and
+MapLibre's *own* public demo vector source hangs identically, so it is the environment and not
+this code. No vector tiles paint there.
+
+The tiles themselves were verified instead, over HTTP and decoded with `tests/mvt.py`:
+
+| Zoom | Features | Attributes |
+|---|---|---|
+| z15 | 8 individual | `cluster_id`, `severity`, `confidence`, `distinct_devices`, `repaired`, … |
+| z12 | 20 aggregated | `point_count`, `max_severity` |
+
+which is exactly what the two style layers filter on. **Open it in a normal browser to confirm
+the markers draw** — that is the one gap in this phase's verification.
+
+## Bugs worth remembering
+
+Four, all found by testing rather than review:
+
+1. **Shared FastAPI `Path()` instance.** `x` and `y` in the tile routes initially shared one
+   `Path()` object. FastAPI sets the alias on the object it is handed, so the second parameter
+   overwrote the first's binding and both read the same path segment — the endpoint returned a
+   valid, empty, **wrong** tile with a 200 rather than erroring.
+2. **`Number(null)` is `0`, not `NaN`.** The URL-state parser treated an absent `lat`/`lon`/`z`
+   as a valid view, dropping every first-time visitor at Null Island (0, 0) at zoom 0. Now
+   parsed through a helper that distinguishes absent from zero.
+3. **MapLibre applies `.maplibregl-map` to the container you hand it**, not to a child it
+   creates. A `position: absolute; inset: 0` rule intended for an inner element therefore
+   ripped the map out of the flex layout and floated it over the entire shell, hiding the top
+   bar and rail.
+4. **`LIMIT` without `ORDER BY`** in `_CLUSTER_TILE_SQL` (a step-1 bug found during the step-3
+   review). Above `tile_max_features`, which clusters survived truncation was whatever the
+   planner returned, so markers popped in and out between pans at the same zoom. Now ordered
+   worst-first, so a truncated tile keeps the clusters an operator most needs to see.
 
 ## Measured
 
@@ -341,19 +695,36 @@ binding and both read the same path segment — the endpoint returned a valid, e
 | §3.4 budget | p50 < 80 ms / p95 < 250 ms |
 | detail queries, 5k clusters / 60k links | 0.24 ms, all index scans |
 | real frame JPEGs on disk | 12–62 KB, median 39 KB |
+| dashboard bundle | 251.7 KB gzip JS + 13.2 KB gzip CSS |
+| §3.4 bundle budget | < 800 KB gzip |
+| severity ramp luminance | 0.720 → 0.534 → 0.263 → 0.095 (monotonic) |
+
+MapLibre is ~250 KB of that bundle; the application code is a few KB. The budget did **not**
+drive the no-framework choice — React would have fit comfortably. The reason is that the core
+loop is one map, one panel and one form, where a framework buys about forty lines of state
+plumbing; the cost accepted in exchange is the async-race discipline (the `AbortController`
+per panel open, the single-flight refresh) that a framework would have handled.
 
 ## Out of scope / next
 
-- **Step 3 — the browser frontend** (`dashboard/`, Vite + MapLibre + PMTiles). Three things
-  are already known to bite: `transformRequest` is **synchronous** and cannot await a token
-  refresh (MapLibre's failure mode on 401 is silently blank tiles); `<img src>` **cannot send
-  an `Authorization` header**, so frame images need fetch-plus-blob-URL; and
-  `AUTH_JWT_PRIVATE_KEY_PEM` is unset, so `app/auth/keys.py` mints an ephemeral keypair per
-  process and every reload logs the dashboard out. Serve `dashboard/` from the FastAPI origin
-  to avoid an `OPTIONS` preflight per tile URL.
 - **Step 4 — live updates.** `NOTIFY` on `asset_cluster` → `LISTEN` → WebSocket. Note the data
   only changes every `clustering_interval_minutes` (15), so a sub-2-second push target is
-  largely theatre today; `updated_at` polling is the honest MVP.
+  largely theatre; and because tiles carry `max-age=60`, MapLibre already re-fetches every
+  visible tile each minute. `updated_at` polling — the index exists — is the honest answer,
+  and arguably nothing needs doing here at all.
+- **Frontend automated tests.** None exist. The core loop was verified by driving a browser,
+  which is not a regression net. A Playwright suite covering login → panel → repair would be
+  the highest-value addition.
+- **Filters, inventory list, work orders, reports.** Deferred by scope. The rail has slots.
+- **Basemap.** Raster OSM tiles are **dev-only** under OSM's tile usage policy. A pilot needs
+  self-hosted Protomaps PMTiles (`src/map/basemap.ts` is the single swap point) or a paid
+  provider.
+- **Shipping the bundle in Docker** — needs a `node:22` build stage (see "Running it").
+- **Browser support.** MapLibre 6 requires **WebGL2**; the app shows a plain message rather
+  than a blank screen if it is missing, which is realistic over RDP or in a VM.
+- **`POST /api/v1/auth/logout`.** Does not exist. Clearing client memory leaves a valid
+  30-day refresh token in `refresh_token` server-side.
+- **Back/forward navigation** does not restore state (no `hashchange` listener).
 - **Per-municipality scoping.** `asset_cluster` has no `org_id`, so **any staff member of any
   org can repair any city's clusters**. Reads were already global; the write endpoint makes it
   matter. Direct consequence of the deferred RLS in `005_auth.sql`.

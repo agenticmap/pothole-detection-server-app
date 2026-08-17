@@ -345,7 +345,7 @@ This roadmap **extends** [`docs/roadmap.md`](./roadmap.md); it does not replace 
 | **P2.2 — Clustering + read API** | This doc §4.4; refines `roadmap.md` §2.5–§2.6 | Server | ✅ Shipped — `phase-2.2-clustering-plan.md`, `phase-2.2b-read-path-plan.md` | 1–2 weeks |
 | **P2.3 — Server-side detection model** | `roadmap.md` §2.3 | Server / ML | ✅ Shipped (gated off) — `phase-2.3-detection-plan.md` | — |
 | **P2.4 — City-staff auth tier** | `phase-2.4-auth-plan.md` | Server | ✅ Shipped | — |
-| **P2.5 — Operator dashboard MVP** | This doc §4.5 (was "P2.3") | Web + Server | 🟡 Server side shipped — `phase-2.5-dashboard-plan.md`; frontend not started | 3–4 weeks |
+| **P2.5 — Operator dashboard MVP** | This doc §4.5 (was "P2.3") | Web + Server | ✅ Shipped — `phase-2.5-dashboard-plan.md` | 3–4 weeks |
 | **P2.6 — Production hardening** | `roadmap.md` §2.8–2.10 + `road-test-readiness.md` "Known gaps" | Server / Ops | 📋 Planned | — |
 | **P2.7 — Pilot deployment** | This doc §4.6 (was "P2.4") | Ops | 📋 Planned | 2 weeks |
 | **P3 ✱** | `roadmap.md` §"Phase 3" | Mobile | 📋 Planned | (existing) |
@@ -435,7 +435,7 @@ The API layer never calls into MATLAB directly. The fusion engine is an internal
 
 ### 4.5 Phase 2.5 — Operator dashboard MVP (3–4 weeks)
 
-> **Status: server side shipped**, browser frontend not started. As-built and the deviations
+> **Status: shipped.** As-built and the deviations
 > from Section 3 (FastAPI `ST_AsMVT` instead of Martin, no materialized views, no CDN, no
 > WebSocket yet) are recorded in [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
 > Phase numbered 2.5, not 2.3 — see the note on §4.1.
@@ -454,8 +454,7 @@ Build the GIS dashboard per Section 3.
 - Desktop-first; mobile-responsive is nice-to-have, not required.
 
 **Exit criteria**
-- Operator pans/zooms a city, sees clusters, clicks for details, sees member frames.
-  *(Server side done; needs the frontend.)*
+- Operator pans/zooms a city, sees clusters, clicks for details, sees member frames. *(Done.)*
 - p95 tile fetch < 250 ms on a residential connection.
   *(Server side measured at p95 27 ms for z14 and 81 ms for aggregated z10 on 20k clusters.)*
 - Live "new cluster appeared" toast within 8 s of server-side detection in pilot data.
