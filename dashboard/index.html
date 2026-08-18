@@ -7,12 +7,17 @@
     <meta name="description" content="Municipal operator console for road surface monitoring." />
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%232563eb'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%23c67139'/%3E%3C/svg%3E"
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Figtree is the interface face. Caprasimo is the display voice and is used
+         only on headings, section labels and KPI figures — see --font-display in
+         tokens.css. Both must be loaded here; the system-ui fallback keeps the
+         console usable offline, but Caprasimo has no close substitute, so a
+         missing load is visible rather than silent. -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&family=Caprasimo&display=swap"
       rel="stylesheet"
     />
   </head>

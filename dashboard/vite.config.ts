@@ -17,6 +17,8 @@ export default defineConfig({
     proxy: {
       '/api': { target: apiTarget, changeOrigin: false },
       '/health': { target: apiTarget, changeOrigin: false },
+      // The PMTiles archive is served by FastAPI too, and needs Range support.
+      '/basemap': { target: apiTarget, changeOrigin: false },
     },
   },
   build: {

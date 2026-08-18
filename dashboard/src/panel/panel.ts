@@ -123,7 +123,7 @@ export class DetailPanel {
         class: 'badge badge-severity',
         // Colour is never the only channel: the label and the number carry it too.
         style: tier ? `background:var(${tier.varName})` : '',
-        text: `${severityLabel(detail.severity)} · ${formatNumber(detail.severity, 1)}`,
+        text: `${severityLabel(detail.severity)} · ${formatNumber(detail.severity, 2)}`,
       }),
     ]);
     body.append(badges);
@@ -223,14 +223,24 @@ export class DetailPanel {
     ]);
     const list = el('ul', { class: 'history-list' });
     for (const entry of detail.repair_history) {
+      // Timeline layout: organic-shell.css makes .history-entry a
+      // `9px 1fr` grid and draws the dot with .history-rail::before, so the rail
+      // element is structural, not decoration — without it the row loses its
+      // first column and the dot never appears.
+      //
+      // No data-actor is set: every row we can produce is an operator action
+      // (repair_log's CHECK permits only repaired/unrepaired). The sage
+      // [data-actor='system'] variant is styled and waiting if cluster-event
+      // rows ever land.
       list.append(
         el('li', { class: 'history-entry' }, [
+          el('span', { class: 'history-rail', 'aria-hidden': 'true' }),
           el('span', {
-            class: entry.action === 'repaired' ? 'badge badge-repaired' : 'badge badge-open',
-            text: entry.action,
+            class: 'history-action',
+            text: entry.action === 'repaired' ? 'Marked repaired' : 'Reopened',
           }),
-          el('span', { class: 'history-who', text: entry.user_email ?? entry.user_id }),
           el('span', { class: 'history-when', text: formatDateTime(entry.at) }),
+          el('span', { class: 'history-who', text: entry.user_email ?? entry.user_id }),
           entry.note ? el('p', { class: 'history-note', text: entry.note }) : null,
         ]),
       );

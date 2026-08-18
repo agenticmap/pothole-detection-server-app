@@ -1,0 +1,553 @@
+/* Organic skin — overrides for the existing shell.
+ *
+ * Import AFTER styles.css so these win on equal specificity:
+ *
+ *   import './tokens.css';
+ *   import './styles.css';
+ *   import './organic-shell.css';
+ *
+ * Everything here targets classes that already exist in styles.css, except the
+ * clearly-marked NEW blocks at the end (dock, timeline, readout) which need the
+ * markup noted in INTEGRATION.md.
+ *
+ * The three moves that make the skin read as Organic:
+ *   1. Panels float as rounded surfaces ON the ground — shadow, no border.
+ *   2. Anything you press or type into is a pill.
+ *   3. Caprasimo appears on headings and KPI figures only.
+ */
+
+/* ── Ground & type ─────────────────────────────────────────────────────── */
+
+body {
+  background: var(--color-canvas);
+}
+
+.login-title,
+.section-title,
+.legend-title,
+.brand-name,
+.kpi-value,
+.stat-value {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+/* Section and legend titles keep the small-caps console treatment, so they take
+ * the display face at label size rather than heading size. */
+.section-title,
+.legend-title {
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  color: var(--color-primary);
+}
+
+/* ── Shell: the workspace becomes a padded ground, panes float on it ───── */
+
+.workspace {
+  gap: var(--space-3);
+  padding: 0 var(--space-3) var(--space-3);
+  background: var(--color-canvas);
+}
+
+.topbar {
+  height: var(--topbar-height);
+  padding: 0 var(--space-4) 0 var(--space-3);
+  background: transparent;
+  border-bottom: 0;
+}
+
+.brand {
+  gap: var(--space-2);
+  font-weight: 500;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  font-family: var(--font-display);
+  font-size: 15px;
+}
+
+.asset-select,
+.input,
+.note-input {
+  border-radius: var(--radius-pill);
+  border-color: var(--color-border);
+  padding: var(--space-2) var(--space-3);
+}
+
+.link-button {
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* ── Module rail ───────────────────────────────────────────────────────── */
+
+.rail {
+  width: var(--rail-width);
+  padding: var(--space-3) var(--space-2);
+  gap: var(--space-1);
+  background: var(--color-surface);
+  border-right: 0;
+  border-radius: var(--radius-lg);
+}
+
+.rail-item {
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-2) 0;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+}
+
+.rail-item.is-active {
+  background: var(--color-canvas);
+  color: var(--color-text);
+}
+
+/* The glyph becomes a filled disc on the active module — the rail then reads at
+ * a glance without leaning on colour alone. */
+.rail-glyph {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 400;
+}
+
+.rail-item.is-active .rail-glyph {
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+}
+
+.rail-label {
+  font-size: 10px;
+  line-height: 1.15;
+  text-align: center;
+}
+
+/* ── Map pane ──────────────────────────────────────────────────────────── */
+
+.map-container {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-surface-sunken);
+}
+
+/* Legend moves to the bottom RIGHT — the dock owns the left edge.
+ * Below 700px of map pane the .legend-strip below replaces it (see
+ * INTEGRATION.md; the swap is a width check in JS, not a media query, because
+ * the pane width depends on whether the detail panel is open). */
+.legend {
+  left: auto;
+  right: var(--space-3);
+  bottom: var(--space-3);
+  min-width: 172px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-canvas);
+  border: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.legend-list {
+  gap: var(--space-2);
+}
+
+.legend-dot {
+  border-radius: var(--radius-pill);
+  border: 0;
+  box-shadow:
+    0 0 0 1.5px var(--marker-halo),
+    0 0 0 2.5px var(--color-border);
+}
+
+/* Compact fallback: swatches only, under the zoom control. */
+.legend-strip {
+  position: absolute;
+  right: var(--space-3);
+  top: calc(var(--space-3) + 78px);
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 7px var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-md);
+}
+
+.map-banner {
+  background: var(--color-canvas);
+  border: 0;
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-text);
+}
+
+/* ── Detail panel ──────────────────────────────────────────────────────── */
+
+.panel {
+  border-left: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.panel-header,
+.panel-actions {
+  border-color: transparent;
+  padding: var(--space-4) var(--space-4) var(--space-3);
+}
+
+.panel-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 400;
+  color: var(--color-text);
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-lg);
+}
+
+.panel-body {
+  gap: var(--space-6);
+}
+
+/* Badges: pills tinted from the ramps. `gap` matters — the badge is a flex
+ * container, so without it the whitespace between a value and its label is
+ * dropped and "Severe 7.4" renders as "Severe7.4". */
+.badge {
+  gap: var(--space-1);
+  padding: 3px var(--space-3);
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.02em;
+}
+
+.badge-open {
+  background: var(--color-accent-2-subtle);
+  color: var(--color-accent-2-text);
+}
+
+.badge-repaired {
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+}
+
+.badge-severity {
+  border: 0;
+}
+
+.device-chip {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-2-subtle);
+  color: var(--color-accent-2-text);
+}
+
+.frame-thumb {
+  border-radius: var(--radius-md);
+  border-color: var(--color-border);
+}
+
+/* ── Repair history as a timeline ───────────────────────────────────────
+ * Needs one added element per entry (see INTEGRATION.md):
+ *   <li class="history-entry"><span class="history-rail"></span> …existing… </li>
+ * Without it the entries still render — they just keep the old flat rows. */
+
+.history-list {
+  gap: var(--space-3);
+}
+
+.history-entry {
+  display: grid;
+  grid-template-columns: 9px 1fr;
+  column-gap: var(--space-3);
+  row-gap: 2px;
+  align-items: start;
+  padding: 0 0 var(--space-2);
+  border-bottom: 0;
+}
+
+.history-rail {
+  grid-row: 1 / -1;
+  align-self: stretch;
+  justify-self: center;
+  width: 1px;
+  margin-top: 6px;
+  background: var(--color-border);
+  position: relative;
+}
+
+.history-rail::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+}
+
+/* System events read as the second voice; operator actions keep the accent. */
+.history-entry[data-actor='system'] .history-rail::before {
+  background: var(--color-accent-2);
+}
+
+.history-action {
+  font-weight: 600;
+}
+
+.history-who,
+.history-note {
+  grid-column: 2;
+}
+
+.history-when {
+  grid-column: 2;
+  justify-self: end;
+  grid-row: 1;
+  margin-left: 0;
+}
+
+/* ── Controls ──────────────────────────────────────────────────────────── */
+
+.button {
+  border-radius: var(--radius-pill);
+  font-family: var(--font-display);
+  font-weight: 400;
+  min-height: 38px;
+  padding: var(--space-2) var(--space-5);
+}
+
+.button-primary {
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+}
+
+.button-secondary {
+  background: transparent;
+  border-color: var(--color-border-strong);
+}
+
+.button-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+}
+
+/* ── Login ─────────────────────────────────────────────────────────────── */
+
+.login-form {
+  width: min(392px, 100%);
+  border: 0;
+  border-radius: calc(var(--radius-lg) * 1.4);
+  box-shadow: var(--shadow-lg);
+  gap: var(--space-3);
+}
+
+.login-title {
+  font-size: 22px;
+}
+
+/* ── NEW: the floating dock (KPIs, filters, hover readout) ─────────────── */
+
+/* A full-height flex column at the map's left edge: scrolling cards on top, the
+ * hover readout pinned as the last row. Nothing here uses a fixed pixel offset
+ * for the pane's other overlays, so it degrades by narrowing instead of
+ * collapsing when the detail panel opens. */
+.dock {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+  bottom: var(--space-3);
+  z-index: var(--z-overlay);
+  width: min(var(--dock-width), 64%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dock-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-right: var(--space-1);
+}
+
+.dock-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-lg);
+}
+
+.dock-collapsed {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 9px var(--space-4);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+}
+
+.dock-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dock-divider {
+  height: 1px;
+  background: var(--color-border);
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+}
+
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.kpi-value {
+  font-size: 22px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-label {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.kpi-delta {
+  font-size: var(--text-xs);
+  color: var(--color-primary-hover);
+}
+
+.kpi-delta.is-improving {
+  color: var(--color-accent-2-text);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.chip {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.chip[aria-pressed='true'] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-text-inverse);
+}
+
+/* Filters that select a data SOURCE rather than a severity take the sage
+ * voice, so the two filter kinds never look like one scale. */
+.chip.is-secondary[aria-pressed='true'] {
+  background: var(--color-accent-2-subtle);
+  border-color: var(--color-accent-2);
+  color: var(--color-accent-2-text);
+}
+
+.dock-readout {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.dock-readout > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock-readout::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+}
+
+/* Provenance note — shown when the cluster feed is a fixture rather than live. */
+.provenance-note {
+  display: flex;
+  gap: var(--space-2);
+  padding: 9px var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-primary-subtle);
+  color: var(--ramp-accent-800);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+/* ── Narrow screens: the panel becomes a bottom sheet ──────────────────── */
+
+@media (max-width: 1023px) {
+  .panel {
+    border-top: 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  /* The dock would cover the map on a phone — collapse it to its pill. */
+  .dock {
+    bottom: auto;
+    max-height: calc(100% - var(--space-6));
+  }
+}

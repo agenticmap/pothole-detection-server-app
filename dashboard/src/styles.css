@@ -79,6 +79,24 @@ button:disabled {
   color: var(--color-primary);
 }
 
+/* Two-line lockup: product name over a role sub-line, so the console announces
+ * what it is without a second header row. */
+.brand-lockup {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.brand-sub {
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--color-text-subtle);
+}
+
+.theme-toggle {
+  flex: 0 0 auto;
+}
+
 .topbar-spacer {
   flex: 1;
 }
@@ -655,4 +673,85 @@ button:disabled {
   .rail-label {
     display: none;
   }
+}
+
+/* ── Dock header and group labels (Phase 2.5b) ────────────────────────────────
+ * organic-shell.css styles .dock, .dock-card, .dock-group and the chips, but not
+ * the small headings inside them. These are the base layer; the skin can still
+ * override them by loading after. */
+
+.dock-card-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.dock-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.dock-group-title {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Counts sit right-aligned so the tier names stay in one readable column. */
+.legend-count {
+  margin-left: auto;
+  padding-left: var(--space-3);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ── Basemap palette (Phase 2.5b) ─────────────────────────────────────────────
+ * The Protomaps flavor in src/map/basemap.ts reads these through cssVar(), so
+ * the map is themed by the same mechanism as the chrome.
+ *
+ * They exist as their own names rather than the flavor reaching for UI tokens
+ * directly because two of them have no UI equivalent that flips correctly:
+ * --ramp-sage-* and a water blue are defined once and are NOT redefined for dark
+ * mode, so using them straight painted parks and lakes bright on a dark ground. */
+
+:root {
+  --map-land: var(--color-canvas);
+  --map-water: #d7e2e6;
+  --map-green: var(--ramp-sage-200);
+  --map-green-deep: var(--ramp-sage-300);
+  --map-building: var(--ramp-neutral-200);
+  --map-institution: var(--ramp-neutral-100);
+  --map-road: var(--color-surface);
+  --map-road-casing: var(--ramp-neutral-300);
+  --map-road-casing-strong: var(--ramp-neutral-400);
+}
+
+/* Only the two that the ramps do not flip need restating; --ramp-neutral-* is
+ * already inverted by the dark block in tokens.css, so the roads and buildings
+ * follow on their own. */
+[data-theme='dark'] {
+  --map-water: #1f2c33;
+  --map-green: #2c352a;
+  --map-green-deep: #333d30;
+}
+
+/* [hidden] sets display:none in the UA stylesheet, which any class rule with a
+ * display of its own beats — .dock-collapsed is display:flex, so the collapsed
+ * pill rendered on top of the open dock. Restate it at class specificity. */
+.dock-collapsed[hidden],
+.dock-scroll[hidden],
+.dock-readout[hidden],
+.provenance-note[hidden] {
+  display: none;
 }

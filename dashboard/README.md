@@ -116,3 +116,61 @@ Each of these cost real time to find. They are in the code as comments too.
 Filters, the inventory list, work orders, reports, dark mode, and any automated frontend
 tests. The module rail has disabled slots for the first four so adding them is additive.
 Raster OSM basemap tiles are dev-only under OSM's usage policy.
+
+---
+
+## Phase 2.5b — vector basemap and demo data
+
+### The basemap archive
+
+The map background is a **self-hosted Protomaps PMTiles archive**: one file, served over HTTP
+range requests, with no basemap tile server. FastAPI mounts it at `/basemap` (`app/main.py`),
+and Starlette's `FileResponse` implements `Range`, which is the whole mechanism — without range
+support a client would pull the entire archive to read one tile.
+
+It is a build artefact, not source. `storage/` is gitignored, so regenerate it after a clone:
+
+```bash
+# 1. Get the CLI — one Go binary, from github.com/protomaps/go-pmtiles/releases
+# 2. Cut a bbox out of the daily planet build. Only the needed byte ranges are
+#    downloaded, so this is fast (Toronto at z14 is ~19 MB in a few seconds).
+pmtiles extract https://build.protomaps.com/<YYYYMMDD>.pmtiles \
+  storage/basemap/toronto.pmtiles --bbox=-79.64,43.58,-79.11,43.86 --maxzoom=14
+```
+
+Builds are listed at `maps.protomaps.com/builds` and are retained for about two weeks, so pick
+a recent date. Verify the result by dropping it on <https://protomaps.github.io/PMTiles/>.
+`VITE_BASEMAP_URL` overrides the path if you cut a different region.
+
+`--maxzoom=14` matches `SOURCE_MAX_ZOOM` in `src/map/map.ts`; MapLibre overzooms above it.
+
+**Glyphs and sprites are still fetched from Protomaps' GitHub Pages origin.** That is fine for
+development and *not* fine for a pilot — a municipal tool should not lose its street labels
+because a third-party origin is having a bad day. Self-hosting them under
+`public/basemap-assets/` is an open task.
+
+### Demo data
+
+```bash
+DATABASE_URL=postgresql://pothole:pothole@localhost:5433/pothole_test \
+  python scripts/seed_demo.py --reset
+```
+
+120 deterministic synthetic clusters over Toronto, with observations, camera frames (real JPEGs
+on disk), and repair history. It refuses to run against any database but `pothole_test` /
+`pothole_ci`, mirroring the guard in `tests/conftest.py`.
+
+Note that **`pytest` TRUNCATEs every table**, so a test run wipes the seed *and* the staff
+account. Re-run `scripts/create_staff.py` and then `seed_demo.py` afterwards.
+
+### Things that will bite you (continued)
+
+- **MapLibre's worker is a static asset, not a bundled chunk.** MapLibre 6 computes its worker
+  URL at runtime, so no bundler emits it; `npm run dev` and `npm run build` both run
+  `scripts/copy-maplibre-worker.mjs` first to place it under `public/maplibre/`. If that script
+  is skipped the worker 404s and **every vector source silently never loads** — no error, no
+  console warning, no tile requests, just an empty map. See `src/map/worker.ts`.
+- **Severity is on a [0, 1] scale**, not the single digits the tier comment used to claim. The
+  server clamps it (`app/sensor_model/features.py`); the tier floors are 0 / 0.25 / 0.5 / 0.75.
+- **A theme change swaps the whole style**, so the cluster source is rebuilt and any optimistic
+  repair feature-state is dropped. That is deliberate; the next tile fetch is the truth.

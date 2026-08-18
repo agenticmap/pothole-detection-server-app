@@ -13,7 +13,8 @@
  */
 
 import { el } from './dom.ts';
-import { SEVERITY_TIERS, severityColors } from './severity.ts';
+import { SEVERITY_TIERS, UNRATED_LABEL, severityColors, unknownColor } from './severity.ts';
+import { currentTheme, toggleTheme, type Theme } from './theme.ts';
 import type { MapView } from './map/map.ts';
 
 export interface AssetType {
@@ -88,6 +89,32 @@ export function writeUrlState(state: UrlState): void {
 export interface ShellCallbacks {
   onAssetTypeChange: (assetType: string) => void;
   onSignOut: () => void;
+  /** Fired after the theme flips, so the map can repaint its layers. */
+  onThemeChange: (theme: Theme) => void;
+}
+
+/**
+ * Theme toggle. Icon-only, so it carries an aria-label and a title that both
+ * describe the ACTION rather than the current state — "Dark mode" when clicking
+ * would give you dark.
+ */
+function buildThemeToggle(onChange: (theme: Theme) => void): HTMLElement {
+  const button = el('button', { class: 'icon-button theme-toggle', type: 'button' });
+
+  const render = (theme: Theme) => {
+    const next = theme === 'dark' ? 'Light mode' : 'Dark mode';
+    button.textContent = theme === 'dark' ? '☀' : '☾';
+    button.setAttribute('aria-label', next);
+    button.setAttribute('title', next);
+  };
+
+  render(currentTheme());
+  button.addEventListener('click', () => {
+    const theme = toggleTheme();
+    render(theme);
+    onChange(theme);
+  });
+  return button;
 }
 
 export function buildShell(
@@ -129,8 +156,13 @@ export function buildShell(
 
   const topbar = el('header', { class: 'topbar' }, [
     el('div', { class: 'brand' }, [
-      el('span', { class: 'brand-mark', 'aria-hidden': 'true', text: '◆' }),
-      el('span', { class: 'brand-name', text: 'RoadWatch' }),
+      // The mark is a letter on a terracotta disc; organic-shell.css sizes it and
+      // gives it the display face.
+      el('span', { class: 'brand-mark', 'aria-hidden': 'true', text: 'R' }),
+      el('div', { class: 'brand-lockup' }, [
+        el('span', { class: 'brand-name', text: 'RoadWatch' }),
+        el('span', { class: 'brand-sub', text: 'Operator console' }),
+      ]),
     ]),
     assetSelect,
     el('div', { class: 'topbar-spacer' }),
@@ -138,6 +170,7 @@ export function buildShell(
       el('span', { class: 'user-email', text: opts.userEmail }),
       el('span', { class: 'user-meta', text: `${opts.orgId} · ${opts.role}` }),
     ]),
+    buildThemeToggle(callbacks.onThemeChange),
     signOut,
   ]);
 
@@ -159,25 +192,123 @@ export function buildShell(
  * operator has to go looking for is a ramp they will misread.
  */
 function buildLegend(): HTMLElement {
-  const colors = severityColors();
-  const items = SEVERITY_TIERS.map((tier, i) =>
-    el('li', { class: 'legend-item' }, [
-      el('span', {
-        class: 'legend-dot',
-        style: `background:${colors[i]};width:${tier.radius * 1.4}px;height:${tier.radius * 1.4}px`,
-        'aria-hidden': 'true',
-      }),
-      el('span', { text: tier.label }),
-    ]),
-  );
-  items.push(
-    el('li', { class: 'legend-item' }, [
-      el('span', { class: 'legend-dot legend-dot-repaired', 'aria-hidden': 'true' }),
-      el('span', { text: 'Repaired' }),
-    ]),
-  );
-  return el('div', { class: 'legend' }, [
+  const legend = el('div', { class: 'legend' }, [
     el('h2', { class: 'legend-title', text: 'Severity' }),
-    el('ul', { class: 'legend-list' }, items),
+    el('ul', { class: 'legend-list' }),
   ]);
+  renderLegendItems(legend);
+  return legend;
+}
+
+/**
+ * Counts shown beside each swatch.
+ *
+ * From the stats endpoint, not from rendered features — see stats.ts for why the
+ * map is the wrong thing to count. Held at module scope so a theme flip, which
+ * re-runs renderLegendItems, does not wipe them.
+ */
+let counts: { tiers: number[]; unrated: number; repaired: number } | null = null;
+
+/** Compact mode: swatches only, for a narrow map pane. */
+let compact = false;
+
+export function setLegendCounts(
+  tiers: number[] | null,
+  unrated: number | null,
+  repaired: number | null,
+): void {
+  counts =
+    tiers && unrated !== null && repaired !== null ? { tiers, unrated, repaired } : null;
+  refreshLegend();
+}
+
+/**
+ * Fill (or refill) the legend swatches.
+ *
+ * Split out because the swatch colours are resolved from CSS custom properties
+ * at build time — the same reason map.ts has to rebuild its layers — so a theme
+ * flip has to re-run this or the legend stops matching the markers.
+ */
+function renderLegendItems(legend: Element): void {
+  const list = legend.querySelector('.legend-list');
+  if (!list) return;
+
+  const colors = severityColors();
+  const rows: Array<{ label: string; color: string; size: number; count: number | null }> =
+    SEVERITY_TIERS.map((tier, i) => ({
+      label: tier.label,
+      color: colors[i] ?? unknownColor(),
+      size: tier.radius * 1.4,
+      count: counts?.tiers[i] ?? null,
+    }));
+  rows.push({
+    label: UNRATED_LABEL,
+    color: unknownColor(),
+    size: 9,
+    count: counts?.unrated ?? null,
+  });
+  rows.push({ label: 'Repaired', color: '', size: 12, count: counts?.repaired ?? null });
+
+  const items = rows.map((row) => {
+    const isRepaired = row.label === 'Repaired';
+    const dot = el('span', {
+      class: isRepaired ? 'legend-dot legend-dot-repaired' : 'legend-dot',
+      style: isRepaired
+        ? `width:${row.size}px;height:${row.size}px`
+        : `background:${row.color};width:${row.size}px;height:${row.size}px`,
+      'aria-hidden': 'true',
+      // In compact mode the label is gone, so the swatch has to carry it.
+      title: row.count === null ? row.label : `${row.label} — ${row.count}`,
+    });
+    if (compact) return el('li', { class: 'legend-item' }, [dot]);
+    return el('li', { class: 'legend-item' }, [
+      dot,
+      el('span', { text: row.label }),
+      row.count === null
+        ? null
+        : el('span', { class: 'legend-count', text: String(row.count) }),
+    ]);
+  });
+  list.replaceChildren(...items);
+}
+
+/** Re-render the legend swatches from the current theme's tokens. */
+export function refreshLegend(root: ParentNode = document): void {
+  const legend = root.querySelector('.legend, .legend-strip');
+  if (legend) renderLegendItems(legend);
+}
+
+/**
+ * Swap the legend to its compact strip when the map pane gets narrow, and keep
+ * MapLibre's canvas in step with the pane.
+ *
+ * A ResizeObserver on the pane rather than a media query, because the pane's
+ * width depends on whether the detail panel is open — a viewport-width query
+ * would leave the full legend overlapping an open panel on a laptop.
+ */
+const COMPACT_BELOW_PX = 700;
+
+export function installLegendResponsiveness(
+  mapContainer: HTMLElement,
+  onResize: () => void,
+): () => void {
+  const observer = new ResizeObserver((entries) => {
+    const width = entries[0]?.contentRect.width ?? mapContainer.clientWidth;
+    const next = width < COMPACT_BELOW_PX;
+    if (next !== compact) {
+      compact = next;
+      const legend = mapContainer.querySelector('.legend, .legend-strip');
+      if (legend) {
+        legend.className = compact ? 'legend-strip' : 'legend';
+        const title = legend.querySelector('.legend-title');
+        if (title) (title as HTMLElement).hidden = compact;
+        renderLegendItems(legend);
+      }
+    }
+    // MapLibre does not watch its container, so without this the canvas keeps the
+    // old size and the map appears stretched when the panel opens.
+    onResize();
+  });
+  observer.observe(mapContainer);
+  return () => observer.disconnect();
 }

@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/organic-7dbe9915-f96e-4dda-b298-1e3ff960e270/styles.css">
+<script src="_ds/organic-7dbe9915-f96e-4dda-b298-1e3ff960e270/_ds_bundle.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; background: var(--color-bg); }
+  a { color: var(--color-accent-700); text-decoration: none; }
+  a:hover { color: var(--color-accent-600); }
+  .leaflet-tile-pane { filter: saturate(0.38) contrast(0.88) brightness(1.08); }
+  .leaflet-container { background: var(--color-neutral-200); font-family: var(--font-body); }
+  .leaflet-control-attribution { background: color-mix(in srgb, var(--color-bg) 82%, transparent) !important;
+    font-size: 10px !important; border-radius: 999px 0 0 0; padding: 2px 8px !important; }
+  .leaflet-bar { border: 0 !important; border-radius: 999px !important; overflow: hidden; box-shadow: var(--shadow-md) !important; }
+  .leaflet-bar a { background: var(--color-bg) !important; color: var(--color-text) !important; border-bottom-color: var(--color-divider) !important; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  @keyframes shimmer { from { background-position: 200% 0 } to { background-position: -200% 0 } }
+  [data-theme="dark"] { --color-bg: #2e2b25; --color-surface: #3a352d; --color-text: #f9f4ed;
+    --color-divider: color-mix(in srgb, #f9f4ed 18%, transparent);
+    --color-neutral-100: #403b32; --color-neutral-200: #4b453a; --color-neutral-300: #5a5347;
+    --color-neutral-600: #bdb3a3; --color-neutral-700: #cfc6b8; --color-neutral-800: #e6ded2; }
+  [data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) saturate(0.3) brightness(0.9) contrast(1.05); }
+  [data-theme="dark"] .btn-primary { background: var(--color-accent-400); color: #2e2b25; }
+  [data-theme="dark"] .input { background: var(--color-neutral-100); color: var(--color-text); }
+</style>
+</helmet>
+
+<sc-if value="{{ isLogin }}" hint-placeholder-val="{{ false }}">
+  <div style="height:100vh;display:grid;place-items:center;background:var(--color-bg);padding:var(--space-6)">
+    <div style="width:min(392px,100%);display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-6);border-radius:calc(var(--radius-lg) * 1.4);background:var(--color-surface);box-shadow:var(--shadow-lg)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:38px;height:38px;flex:none;border-radius:999px;background:var(--color-accent);color:var(--color-bg);display:grid;place-items:center;font-family:var(--font-heading);font-size:17px">R</div>
+        <span style="font-family:var(--font-heading);font-size:21px">RoadWatch</span>
+      </div>
+      <h3 style="margin:var(--space-3) 0 0">Sign in to the operator console</h3>
+      <p style="margin:0;font-size:13px;color:var(--color-neutral-700)">Staff accounts only. Ask your municipal administrator for access.</p>
+      <div class="field" style="margin-top:var(--space-2)">
+        <label for="lgEmail">Work email</label>
+        <input class="input" id="lgEmail" type="email" style="border-radius:999px" value="jane@toronto.ca">
+      </div>
+      <div class="field">
+        <label for="lgPass">Password</label>
+        <input class="input" id="lgPass" type="password" style="border-radius:999px" value="············">
+      </div>
+      <button type="button" class="btn btn-primary btn-block" style="margin-top:var(--space-2)">Sign in</button>
+      <span style="font-size:11px;color:var(--color-neutral-600)">City of Toronto · org_toronto</span>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ isApp }}" hint-placeholder-val="{{ true }}">
+<div style="height:100vh;display:flex;flex-direction:column;background:var(--color-bg);overflow:hidden">
+
+  <header style="display:flex;align-items:center;gap:var(--space-4);height:66px;flex:none;padding:0 var(--space-4) 0 var(--space-3)">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div style="width:34px;height:34px;flex:none;border-radius:999px;background:var(--color-accent);color:var(--color-bg);display:grid;place-items:center;font-family:var(--font-heading);font-size:15px">R</div>
+      <div style="display:flex;flex-direction:column">
+        <span style="font-family:var(--font-heading);font-size:18px;line-height:1.05">RoadWatch</span>
+        <span style="font-size:11px;color:var(--color-neutral-600)">Operator console</span>
+      </div>
+    </div>
+    <select class="input" aria-label="Asset type" style="width:auto;border-radius:999px;padding:7px var(--space-3);font-size:13px;margin-left:var(--space-3)">
+      <option>Potholes</option>
+      <option disabled="disabled">Signs (soon)</option>
+      <option disabled="disabled">Streetlights (soon)</option>
+      <option disabled="disabled">Crosswalks (soon)</option>
+    </select>
+    <span class="tag tag-accent-2" style="font-size:11px;gap:4px">{{ openCount }} open defects shown</span>
+    <div style="flex:1"></div>
+    <div style="display:flex;flex-direction:column;text-align:right;line-height:1.2">
+      <span style="font-size:13px">jane@toronto.ca</span>
+      <span style="font-size:11px;color:var(--color-neutral-600)">City of Toronto · staff</span>
+    </div>
+    <button type="button" class="btn btn-icon btn-secondary" ref="{{ themeBtnRef }}" aria-label="Dark mode" title="Dark mode" onClick="{{ toggleTheme }}">☾</button>
+    <button type="button" class="btn btn-ghost" style="font-size:13px">Sign out</button>
+  </header>
+
+  <div style="flex:1;min-height:0;display:flex;gap:var(--space-3);padding:0 var(--space-3) var(--space-3)">
+
+    <nav aria-label="Modules" style="width:88px;flex:none;display:flex;flex-direction:column;gap:4px;padding:var(--space-3) 10px;border-radius:calc(var(--radius-lg) * 1.2);background:var(--color-surface)">
+      <sc-for list="{{ modules }}" as="m" hint-placeholder-count="5">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:5px;padding:10px 0;border-radius:var(--radius-lg);background:{{ m.bg }};opacity:{{ m.dim }}">
+          <span style="width:32px;height:32px;border-radius:999px;display:grid;place-items:center;font-family:var(--font-heading);font-size:14px;background:{{ m.chipBg }};color:{{ m.chipFg }}">{{ m.glyph }}</span>
+          <span style="font-size:10px;letter-spacing:.02em;color:{{ m.labelFg }};text-align:center;line-height:1.15">{{ m.label }}</span>
+        </div>
+      </sc-for>
+      <div style="margin-top:auto;font-size:10px;color:var(--color-neutral-600);text-align:center;line-height:1.3">Phase 2.5</div>
+    </nav>
+
+    <div style="flex:1;min-width:0;position:relative;border-radius:calc(var(--radius-lg) * 1.2);overflow:hidden;background:var(--color-neutral-200)">
+      <div ref="{{ mapRef }}" style="position:absolute;inset:0"></div>
+
+      <div style="position:absolute;top:var(--space-3);left:var(--space-3);bottom:var(--space-3);z-index:500;width:min(322px,64%);display:flex;flex-direction:column;gap:var(--space-2)">
+      <sc-if value="{{ dockOpen }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:var(--space-2);padding-right:4px">
+
+        <sc-if value="{{ synthetic }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;gap:8px;padding:9px 14px;border-radius:var(--radius-md);background:var(--color-accent-100);color:var(--color-accent-800);font-size:11px;line-height:1.4">Synthetic sample network — 118 clusters seeded over Toronto. Point the console at a live /clusters feed for real geometry.</div>
+        </sc-if>
+
+        <div style="display:flex;flex-direction:column;gap:var(--space-3);padding:var(--space-4);border-radius:calc(var(--radius-lg) * 1.15);background:var(--color-bg);box-shadow:var(--shadow-lg)">
+          <div style="display:flex;align-items:flex-start;gap:var(--space-2)">
+            <div style="flex:1">
+              <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent)">Network health</span>
+              <h4 style="margin:2px 0 0">City of Toronto</h4>
+            </div>
+            <button type="button" class="btn btn-icon btn-secondary" aria-label="Collapse panel" title="Collapse panel" onClick="{{ toggleDock }}">‹</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)">
+            <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:1px;padding:10px var(--space-3);border-radius:var(--radius-md);background:var(--color-surface)">
+                <b style="font-family:var(--font-heading);font-weight:400;font-size:22px;line-height:1.1;font-variant-numeric:tabular-nums">{{ k.value }}</b>
+                <span style="font-size:11px;color:var(--color-neutral-700)">{{ k.label }}</span>
+                <span style="font-size:11px;color:{{ k.deltaFg }}">{{ k.delta }}</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="height:1px;background:var(--color-divider)"></div>
+
+          <div style="display:flex;flex-direction:column;gap:var(--space-2)">
+            <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)">Find a street</span>
+            <input class="input" type="search" placeholder="Street or corridor name" autocomplete="off" aria-label="Find a street" style="border-radius:999px;font-size:13px" value="{{ search }}" onChange="{{ onSearch }}">
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:var(--space-2)">
+            <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)">Severity tier</span>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              <sc-for list="{{ tierChips }}" as="ch" hint-placeholder-count="5">
+                <button type="button" aria-pressed="{{ ch.on }}" onClick="{{ ch.toggle }}" style="cursor:pointer;font:inherit;font-size:11px;padding:4px 11px;border-radius:999px;border:1px solid {{ ch.bd }};background:{{ ch.bg }};color:{{ ch.fg }}">{{ ch.label }} · {{ ch.count }}</button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:var(--space-2)">
+            <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)">Detection source</span>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              <sc-for list="{{ sourceChips }}" as="ch" hint-placeholder-count="3">
+                <button type="button" aria-pressed="{{ ch.on }}" onClick="{{ ch.toggle }}" style="cursor:pointer;font:inherit;font-size:11px;padding:4px 11px;border-radius:999px;border:1px solid {{ ch.bd }};background:{{ ch.bg }};color:{{ ch.fg }}">{{ ch.label }} · {{ ch.count }}</button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:var(--space-2)">
+            <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600)">Corroboration</span>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              <sc-for list="{{ deviceChips }}" as="ch" hint-placeholder-count="3">
+                <button type="button" aria-pressed="{{ ch.on }}" onClick="{{ ch.toggle }}" style="cursor:pointer;font:inherit;font-size:11px;padding:4px 11px;border-radius:999px;border:1px solid {{ ch.bd }};background:{{ ch.bg }};color:{{ ch.fg }}">{{ ch.label }}</button>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ dockClosed }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;min-height:0;display:flex;align-items:flex-start">
+          <button type="button" onClick="{{ toggleDock }}" style="cursor:pointer;font:inherit;display:flex;align-items:center;gap:8px;padding:9px 16px;border:0;border-radius:999px;background:var(--color-bg);box-shadow:var(--shadow-md);font-size:12px;color:var(--color-text)">
+            <span style="color:var(--color-accent)">›</span>
+            <span>Network health &amp; filters</span>
+          </button>
+        </div>
+      </sc-if>
+
+        <div style="flex:none;align-self:flex-start;max-width:100%;display:flex;align-items:center;gap:9px;min-width:0;padding:8px 16px;border-radius:999px;background:var(--color-bg);box-shadow:var(--shadow-md);font-size:12px;white-space:nowrap">
+          <span style="width:7px;height:7px;flex:none;border-radius:999px;background:var(--color-accent)"></span>
+          <span style="min-width:0;overflow:hidden;text-overflow:ellipsis">{{ banner }}</span>
+        </div>
+      </div>
+
+      <sc-if value="{{ legendCompact }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;right:var(--space-3);top:calc(var(--space-3) + 78px);z-index:500;display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;background:var(--color-bg);box-shadow:var(--shadow-md)">
+        <sc-for list="{{ legend }}" as="row" hint-placeholder-count="5">
+          <span title="{{ row.title }}" style="width:{{ row.size }};height:{{ row.size }};flex:none;border-radius:999px;background:{{ row.color }};opacity:{{ row.opacity }}"></span>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ legendFull }}" hint-placeholder-val="{{ true }}">
+      <div style="position:absolute;right:var(--space-3);bottom:var(--space-3);z-index:500;display:flex;flex-direction:column;gap:8px;min-width:172px;padding:var(--space-3) var(--space-4);border-radius:calc(var(--radius-lg) * 1.15);background:var(--color-bg);box-shadow:var(--shadow-md)">
+        <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-accent)">Severity</span>
+        <sc-for list="{{ legend }}" as="row" hint-placeholder-count="5">
+          <div style="display:flex;align-items:center;gap:10px;font-size:12px;font-variant-numeric:tabular-nums">
+            <span style="width:22px;display:grid;place-items:center;flex:none">
+              <span style="width:{{ row.size }};height:{{ row.size }};border-radius:999px;background:{{ row.color }};box-shadow:0 0 0 1.5px var(--color-bg),0 0 0 2.5px var(--color-divider);opacity:{{ row.opacity }}"></span>
+            </span>
+            <span style="flex:1">{{ row.label }}</span>
+            <span style="color:var(--color-neutral-600)">{{ row.count }}</span>
+          </div>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ loading }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;inset:0;z-index:600;display:grid;place-items:center;pointer-events:none;background:color-mix(in srgb, var(--color-bg) 45%, transparent)">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 20px;border-radius:999px;background:var(--color-bg);box-shadow:var(--shadow-lg);font-size:13px">
+            <span style="width:12px;height:12px;border-radius:999px;border:2px solid var(--color-accent-300);border-top-color:var(--color-accent);animation:spin .8s linear infinite"></span>
+            <span>Loading detection clusters…</span>
+          </div>
+        </div>
+      </sc-if>
+
+
+    </div>
+
+    <sc-if value="{{ hasSelection }}" hint-placeholder-val="{{ true }}">
+    <aside aria-label="Cluster detail" style="width:428px;flex:none;display:flex;flex-direction:column;border-radius:calc(var(--radius-lg) * 1.2);background:var(--color-surface);box-shadow:var(--shadow-md);overflow:auto">
+
+      <header style="position:sticky;top:0;z-index:2;display:flex;align-items:flex-start;gap:var(--space-2);padding:var(--space-4) var(--space-4) var(--space-3);background:var(--color-surface)">
+        <div style="flex:1;display:flex;flex-direction:column;gap:3px">
+          <span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--color-neutral-600)">{{ sel.id }}</span>
+          <h4 style="margin:0">{{ sel.street }}</h4>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:5px">
+            <span class="tag" style="gap:4px;background:{{ sel.statusBg }};color:{{ sel.statusFg }}">{{ sel.status }}</span>
+            <span class="tag" style="gap:4px;background:{{ sel.sevBg }};color:{{ sel.sevFg }}">{{ sel.sevLabel }} · {{ sel.sevValue }}</span>
+          </div>
+        </div>
+        <button type="button" class="btn btn-icon btn-secondary" aria-label="Close detail panel" onClick="{{ close }}">✕</button>
+      </header>
+
+      <div style="display:flex;flex-direction:column;gap:var(--space-6);padding:0 var(--space-4) var(--space-6)">
+
+        <section style="display:flex;flex-direction:column;gap:2px">
+          <sc-for list="{{ sel.fields }}" as="f" hint-placeholder-count="6">
+            <div style="display:flex;justify-content:space-between;gap:var(--space-3);font-size:13px;padding:4px 0">
+              <span style="color:var(--color-neutral-600)">{{ f.label }}</span>
+              <span style="text-align:right;font-variant-numeric:tabular-nums;font-family:{{ f.family }}">{{ f.value }}</span>
+            </div>
+          </sc-for>
+        </section>
+
+        <section style="display:flex;flex-direction:column;gap:var(--space-2)">
+          <h5 style="margin:0">Camera frames</h5>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)">
+            <sc-for list="{{ sel.frames }}" as="fr" hint-placeholder-count="4">
+              <figure style="margin:0;display:flex;flex-direction:column;gap:4px">
+                <div style="aspect-ratio:4/3;border-radius:var(--radius-md);display:grid;place-items:center;text-align:center;padding:var(--space-2);font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--color-neutral-700);background:repeating-linear-gradient(135deg,var(--color-neutral-200) 0 8px,var(--color-neutral-300) 8px 16px)">{{ fr.tag }}</div>
+                <figcaption style="font-size:11px;color:var(--color-neutral-600);font-variant-numeric:tabular-nums">{{ fr.caption }}</figcaption>
+              </figure>
+            </sc-for>
+          </div>
+          <span style="font-size:11px;color:var(--color-neutral-600)">{{ sel.framesNote }}</span>
+        </section>
+
+        <section style="display:flex;flex-direction:column;gap:var(--space-2)">
+          <h5 style="margin:0">{{ sel.obsHeading }}</h5>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <sc-for list="{{ sel.members }}" as="mb" hint-placeholder-count="6">
+              <div style="display:flex;align-items:center;gap:var(--space-2);font-size:13px;padding:4px 0">
+                <span style="width:22px;height:22px;flex:none;border-radius:999px;display:grid;place-items:center;font-size:11px;font-weight:600;background:var(--color-accent-2-100);color:var(--color-accent-2-800)">{{ mb.ref }}</span>
+                <span style="flex:1;color:var(--color-neutral-700)">{{ mb.ts }}</span>
+                <span style="font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums">{{ mb.score }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <span style="font-size:11px;color:var(--color-neutral-600)">{{ sel.obsNote }}</span>
+        </section>
+
+        <sc-if value="{{ sel.hasHistory }}" hint-placeholder-val="{{ true }}">
+          <section style="display:flex;flex-direction:column;gap:var(--space-2)">
+            <h5 style="margin:0">Repair history</h5>
+            <div style="display:flex;flex-direction:column;gap:var(--space-3)">
+              <sc-for list="{{ sel.history }}" as="h" hint-placeholder-count="2">
+                <div style="display:flex;gap:var(--space-3)">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding-top:5px">
+                    <span style="width:9px;height:9px;flex:none;border-radius:999px;background:{{ h.dot }}"></span>
+                    <span style="flex:1;width:1px;background:var(--color-divider)"></span>
+                  </div>
+                  <div style="flex:1;display:flex;flex-direction:column;gap:2px;padding-bottom:var(--space-2)">
+                    <div style="display:flex;align-items:baseline;gap:var(--space-2)">
+                      <strong style="flex:1;font-size:13px;font-weight:600">{{ h.action }}</strong>
+                      <span style="font-size:11px;color:var(--color-neutral-600)">{{ h.when }}</span>
+                    </div>
+                    <span style="font-size:12px;color:var(--color-neutral-700)">{{ h.who }}</span>
+                    <p style="margin:2px 0 0;font-size:12px;color:var(--color-neutral-700)">{{ h.note }}</p>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+        </sc-if>
+      </div>
+
+      <footer style="position:sticky;bottom:0;display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-3) var(--space-4) var(--space-4);background:var(--color-surface)">
+        <input class="input" type="text" placeholder="Optional note (e.g. crew, work order)" aria-label="Repair note" style="border-radius:999px;font-size:13px">
+        <button type="button" class="btn btn-primary btn-block">{{ sel.action }}</button>
+        <span style="font-size:11px;color:var(--color-neutral-600);text-align:center">Repair writes are re-checked against your role on the server.</span>
+      </footer>
+    </aside>
+    </sc-if>
+  </div>
+</div>
+</sc-if>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;severityRamp&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Warm (Organic)&quot;,&quot;ColorBrewer YlOrRd&quot;],&quot;default&quot;:&quot;Warm (Organic)&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Severity encoding&quot;},&quot;showRepaired&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Severity encoding&quot;},&quot;screen&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Dashboard&quot;,&quot;Login&quot;],&quot;default&quot;:&quot;Dashboard&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Screen&quot;}}">
+const RAMPS = {
+  "Warm (Organic)": ["#f2cf9b", "#e0a163", "#c67139", "#8c491a"],
+  "ColorBrewer YlOrRd": ["#fed976", "#feb24c", "#fc4e2a", "#b10026"],
+};
+const TIERS = [
+  { min: 0, label: "Low", radius: 5 },
+  { min: 1.5, label: "Moderate", radius: 7 },
+  { min: 3, label: "High", radius: 9 },
+  { min: 5, label: "Severe", radius: 11 },
+];
+const UNKNOWN = "#a19786";
+const REPAIRED = "#7d7364";
+const CENTRE = [43.6532, -79.3832];
+const STREETS = ["Dundas St W", "Queen St E", "Bloor St W", "Ossington Ave", "Lake Shore Blvd W", "Gerrard St E",
+  "College St", "Spadina Ave", "Bathurst St", "Danforth Ave", "Kingston Rd", "Eglinton Ave E", "Roncesvalles Ave",
+  "Broadview Ave", "Adelaide St W", "Front St E", "Jarvis St", "Christie St", "Coxwell Ave", "Dupont St"];
+const SOURCES = ["sensor + camera", "sensor only", "sensor + camera", "camera review"];
+
+function rng(seed) { let s = seed % 2147483647 || 1; return () => (s = (s * 48271) % 2147483647) / 2147483647; }
+function tierFor(sev) { if (sev === null) return null; let m = null; for (const t of TIERS) if (sev >= t.min) m = t; return m; }
+const DEFAULT_BANNER = "Hover a marker for its reading · click to open the record";
+const DEVICE_STEPS = [{ v: 1, label: "Any" }, { v: 2, label: "2+ devices" }, { v: 4, label: "4+ devices" }];
+function fmt(n, d) { return n === null ? "—" : n.toFixed(d); }
+
+class Component extends DCLogic {
+  state = {
+    selected: null, banner: DEFAULT_BANNER, loading: true, search: "",
+    tiers: { Low: true, Moderate: true, High: true, Severe: true, Unrated: true },
+    sources: { "sensor + camera": true, "sensor only": true, "camera review": true },
+    minDevices: 1, dockOpen: true, paneWide: true,
+  };
+
+  setTheme(dark) {
+    this.dark = dark;
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    const btn = this.themeBtn;
+    if (btn) {
+      btn.textContent = dark ? "\u2600" : "\u263e";
+      const label = dark ? "Light mode" : "Dark mode";
+      btn.setAttribute("aria-label", label);
+      btn.setAttribute("title", label);
+    }
+    this.paint();
+  }
+
+  constructor(props) {
+    super(props);
+    this.mapRef = el => { if (el && el !== this.mapEl) { this.mapEl = el; this.boot(); } };
+    this.themeBtnRef = el => { if (el) this.themeBtn = el; };
+    const r = rng(90210);
+    this.clusters = Array.from({ length: 118 }, (_, i) => {
+      const sev = r() < 0.06 ? null : +(r() * 7.4).toFixed(1);
+      const repaired = r() < 0.22;
+      const hex = Math.floor(r() * 0xffffff).toString(16).padStart(6, "0");
+      return {
+        id: "clu_" + hex,
+        lat: CENTRE[0] + (r() - 0.5) * 0.085,
+        lon: CENTRE[1] + (r() - 0.5) * 0.16,
+        severity: sev, repaired,
+        street: STREETS[Math.floor(r() * STREETS.length)] + " · " + (100 + Math.floor(r() * 2400)),
+        confidence: +(0.58 + r() * 0.41).toFixed(2),
+        devices: 1 + Math.floor(r() * 6),
+        observations: 3 + Math.floor(r() * 41),
+        source: SOURCES[Math.floor(r() * SOURCES.length)],
+        frames: r() < 0.18 ? 0 : 2 + Math.floor(r() * 5),
+        day: 6 + Math.floor(r() * 11),
+        hour: 7 + Math.floor(r() * 11),
+        min: Math.floor(r() * 60),
+        seed: Math.floor(r() * 1e6),
+      };
+    });
+  }
+
+  ramp() { return RAMPS[this.props.severityRamp] || RAMPS["Warm (Organic)"]; }
+  colorOf(c) {
+    if (c.repaired) return REPAIRED;
+    const t = tierFor(c.severity);
+    return t ? this.ramp()[TIERS.indexOf(t)] : UNKNOWN;
+  }
+  tierName(c) { const t = tierFor(c.severity); return t ? t.label : "Unrated"; }
+  shown() {
+    const q = this.state.search.trim().toLowerCase();
+    return this.clusters.filter(c =>
+      ((this.props.showRepaired ?? true) || !c.repaired) &&
+      this.state.tiers[this.tierName(c)] &&
+      this.state.sources[c.source] &&
+      c.devices >= this.state.minDevices &&
+      (!q || c.street.toLowerCase().includes(q)));
+  }
+  refilter(patch) { this.setState(patch, () => this.paint()); }
+  chip(label, on, count, toggle, sage) {
+    return {
+      label, on, count, toggle,
+      bg: on ? (sage ? "var(--color-accent-2-200)" : "var(--color-accent)") : "transparent",
+      fg: on ? (sage ? "var(--color-accent-2-800)" : "var(--color-bg)") : "var(--color-neutral-700)",
+      bd: on ? (sage ? "var(--color-accent-2-300)" : "var(--color-accent)") : "var(--color-divider)",
+    };
+  }
+
+  componentDidMount() { this.boot(); }
+  componentWillUnmount() { if (this.ro) this.ro.disconnect(); }
+  componentDidUpdate(prev) {
+    if (prev.severityRamp !== this.props.severityRamp || prev.showRepaired !== this.props.showRepaired) this.paint();
+    if (prev.screen !== this.props.screen && this.props.screen !== "Login") setTimeout(() => this.boot(), 60);
+  }
+
+  boot() {
+    if (!this.mapEl || this.map) { if (this.map) this.later(50); return; }
+    if (!window.L) return void setTimeout(() => this.boot(), 120);
+    this.map = L.map(this.mapEl, { zoomControl: false }).setView(CENTRE, 12.4);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "© OpenStreetMap contributors", maxZoom: 19 }).addTo(this.map);
+    L.control.zoom({ position: "topright" }).addTo(this.map);
+    this.layer = L.layerGroup().addTo(this.map);
+    this.paint();
+    if (window.ResizeObserver && !this.ro) {
+      this.ro = new ResizeObserver(entries => {
+        if (this.map && this.map._container) this.map.invalidateSize({ animate: false });
+        const w = entries[0] && entries[0].contentRect.width;
+        if (w) { const wide = w > 700; if (wide !== this.state.paneWide) this.setState({ paneWide: wide }); }
+      });
+      this.ro.observe(this.mapEl);
+    }
+    if (!this.state.selected) {
+      const pick = this.clusters.filter(c => !c.repaired).sort((a, b) => (b.severity || 0) - (a.severity || 0))[0];
+      this.setState({ selected: pick.id });
+    }
+    this.later(120);
+    setTimeout(() => this.setState({ loading: false }), 900);
+  }
+
+  later(ms) { setTimeout(() => { if (this.map && this.map._container) this.map.invalidateSize(); }, ms); }
+
+  paint() {
+    if (!this.layer) return;
+    try {
+      if (!this.markers) {
+        this.markers = new Map();
+        this.clusters.forEach(c => {
+          const m = L.circleMarker([c.lat, c.lon], { radius: 4, fillOpacity: 0.95, weight: 1.5 });
+          m.on("click", () => { this.setState({ selected: c.id }, () => this.paint()); });
+          m.on("mouseover", () => {
+            this.setState({ banner: `${c.street} — ${c.repaired ? "repaired" : "open"}, severity ${fmt(c.severity, 1)}, ${c.devices} devices, ${c.observations} observations` });
+            m.setStyle({ weight: 3 });
+          });
+          m.on("mouseout", () => {
+            this.setState({ banner: DEFAULT_BANNER });
+            m.setStyle({ weight: c.id === this.state.selected ? 2.5 : 1.5 });
+          });
+          this.layer.addLayer(m);
+          this.markers.set(c.id, m);
+        });
+      }
+      const visible = new Set(this.shown().map(c => c.id));
+      this.clusters.forEach(c => {
+        const m = this.markers.get(c.id);
+        if (!m) return;
+        const t = tierFor(c.severity);
+        const sel = c.id === this.state.selected;
+        m.setStyle({
+          radius: (t ? t.radius : 4) * (sel ? 1.5 : 1),
+          fillColor: this.colorOf(c),
+          fillOpacity: c.repaired ? 0.55 : 0.95,
+          color: sel ? (this.dark ? "#f9f4ed" : "#201e1d") : (this.dark ? "#2e2b25" : "#f9f4ed"),
+          weight: sel ? 2.5 : 1.5,
+        });
+        if (m._path) m._path.style.display = visible.has(c.id) ? "" : "none";
+      });
+    } catch (err) { console.warn("paint failed", err); }
+  }
+
+  detail(c) {
+    const r = rng(c.seed + 7);
+    const t = tierFor(c.severity);
+    const when = (h, m) => `Aug ${c.day}, 2026 · ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    const frames = Array.from({ length: Math.min(4, c.frames) }, (_, i) => ({
+      tag: `frame ${i + 1} · ${String(c.hour).padStart(2, "0")}:${String((c.min + i) % 60).padStart(2, "0")}`,
+      caption: r() < 0.15 ? "not yet scored" : "p=" + fmt(0.62 + r() * 0.37, 2),
+    }));
+    const members = Array.from({ length: Math.min(6, c.observations) }, (_, i) => ({
+      ref: "ABCDEF"[i],
+      ts: when(c.hour, (c.min + i * 7) % 60),
+      score: fmt(0.5 + r() * 0.49, 2),
+    }));
+    const history = c.repaired
+      ? [{ action: "Marked repaired", who: "mike@toronto.ca", when: when(c.hour + 2, 12), note: "Crew 4, hot mix patch. Work order WO-2611.", dot: "var(--color-accent-2)" },
+         { action: "Verified on site", who: "crew tablet", when: when(c.hour + 1, 5), note: "Photo confirmation attached to the work order.", dot: "var(--color-neutral-400)" },
+         { action: "Cluster promoted", who: "system", when: when(c.hour - 4, 3), note: "Third corroborating pass crossed the confidence threshold.", dot: "var(--color-accent)" }]
+      : [{ action: "Cluster promoted", who: "system", when: when(c.hour - 5, 41), note: "Third corroborating pass crossed the confidence threshold.", dot: "var(--color-accent)" },
+         { action: "First observation", who: c.source, when: when(c.hour - 9, 18), note: "Single-device detection, held below the promotion threshold.", dot: "var(--color-neutral-400)" }];
+    const sevIdx = t ? TIERS.indexOf(t) : -1;
+    return {
+      id: c.id, street: c.street,
+      status: c.repaired ? "Repaired" : "Open",
+      statusBg: c.repaired ? "var(--color-neutral-100)" : "var(--color-accent-2-100)",
+      statusFg: c.repaired ? "var(--color-neutral-800)" : "var(--color-accent-2-800)",
+      sevLabel: t ? t.label : "Unrated",
+      sevValue: fmt(c.severity, 1),
+      sevBg: sevIdx >= 0 ? this.ramp()[sevIdx] : UNKNOWN,
+      sevFg: sevIdx >= 2 ? "#f9f4ed" : "#402310",
+      fields: [
+        { label: "Corroborating devices", value: c.devices + (c.devices === 1 ? " device" : " devices"), family: "var(--font-body)" },
+        { label: "Observations", value: String(c.observations), family: "var(--font-body)" },
+        { label: "Confidence", value: c.confidence.toFixed(2), family: "var(--font-body)" },
+        { label: "Last seen", value: when(c.hour, c.min), family: "var(--font-body)" },
+        { label: "Source", value: c.source, family: "var(--font-body)" },
+        { label: "Location", value: c.lat.toFixed(5) + ", " + c.lon.toFixed(5), family: "ui-monospace, Menlo, monospace" },
+      ],
+      frames,
+      framesNote: c.frames === 0 ? "No camera frames paired with this cluster. Sensor-only detection."
+        : c.frames > 4 ? `Showing 4 of ${c.frames} paired frames.` : `${c.frames} paired frames.`,
+      obsHeading: `Observations (${c.observations})`,
+      obsNote: c.observations > 6 ? `Showing 6 of ${c.observations} observations.` : "",
+      members,
+      hasHistory: true, history,
+      action: c.repaired ? "Reopen defect" : "Mark repaired",
+    };
+  }
+
+  renderVals() {
+    const screen = this.props.screen || "Dashboard";
+    const shown = this.shown();
+    const ramp = this.ramp();
+    const sel = this.clusters.find(c => c.id === this.state.selected);
+    const modules = [
+      { id: "map", label: "Map", glyph: "M", on: true },
+      { id: "inv", label: "Inventory", glyph: "I", on: false },
+      { id: "work", label: "Work orders", glyph: "W", on: false },
+      { id: "rep", label: "Reports", glyph: "R", on: false },
+      { id: "adm", label: "Admin", glyph: "A", on: false },
+    ].map(m => ({
+      ...m,
+      bg: m.on ? "var(--color-bg)" : "transparent",
+      dim: m.on ? 1 : 0.5,
+      chipBg: m.on ? "var(--color-accent)" : "var(--color-neutral-200)",
+      chipFg: m.on ? "var(--color-bg)" : "var(--color-neutral-700)",
+      labelFg: m.on ? "var(--color-text)" : "var(--color-neutral-700)",
+    }));
+    const legend = TIERS.map((t, i) => ({
+      label: t.label, title: t.label + " severity", color: ramp[i], size: t.radius * 1.5 + "px", opacity: 1,
+      count: shown.filter(c => !c.repaired && tierFor(c.severity) === t).length,
+    }));
+    legend.push({ label: "Unrated", title: "Unrated", color: UNKNOWN, size: "9px", opacity: 1, count: shown.filter(c => !c.repaired && c.severity === null).length });
+    if (this.props.showRepaired ?? true) legend.push({ label: "Repaired", title: "Repaired", color: REPAIRED, size: "12px", opacity: 0.55, count: shown.filter(c => c.repaired).length });
+    const open = shown.filter(c => !c.repaired);
+    const severe = open.filter(c => (c.severity || 0) >= 5).length;
+    const conf = open.reduce((a, c) => a + c.confidence, 0) / (open.length || 1);
+    const kpis = [
+      { value: String(open.length), label: "Open defects in view", delta: "−214 this month", deltaFg: "var(--color-accent-2-700)" },
+      { value: Math.round(severe / (open.length || 1) * 100) + "%", label: "Rated severe", delta: "+1.5 pts", deltaFg: "var(--color-accent-700)" },
+      { value: conf.toFixed(2), label: "Mean confidence", delta: "+0.03 vs. July", deltaFg: "var(--color-accent-2-700)" },
+      { value: String(shown.filter(c => c.repaired).length), label: "Repaired this month", delta: "38 within SLA", deltaFg: "var(--color-neutral-600)" },
+    ];
+    const tierNames = TIERS.map(t => t.label).concat("Unrated");
+    const tierChips = tierNames.map(name => this.chip(name, this.state.tiers[name],
+      this.clusters.filter(c => this.tierName(c) === name && !c.repaired).length,
+      () => this.refilter({ tiers: { ...this.state.tiers, [name]: !this.state.tiers[name] } })));
+    const sourceChips = Object.keys(this.state.sources).map(src => this.chip(src, this.state.sources[src],
+      this.clusters.filter(c => c.source === src).length,
+      () => this.refilter({ sources: { ...this.state.sources, [src]: !this.state.sources[src] } }), true));
+    const deviceChips = DEVICE_STEPS.map(step => this.chip(step.label, this.state.minDevices === step.v, null,
+      () => this.refilter({ minDevices: step.v }), true));
+    return {
+      isLogin: screen === "Login",
+      kpis, tierChips, sourceChips, deviceChips,
+      loading: this.state.loading,
+      legendFull: this.state.paneWide,
+      legendCompact: !this.state.paneWide,
+      dockOpen: this.state.dockOpen,
+      dockClosed: !this.state.dockOpen,
+      toggleDock: () => this.setState({ dockOpen: !this.state.dockOpen }),
+      synthetic: true,
+      search: this.state.search,
+      onSearch: e => this.refilter({ search: e.target.value }),
+      isApp: screen !== "Login",
+      modules, legend,
+      openCount: (() => {
+        const total = this.clusters.filter(c => !c.repaired).length;
+        return open.length === total ? String(total) : open.length + " of " + total;
+      })(),
+      banner: this.state.banner,
+      hasSelection: !!sel,
+      sel: sel ? this.detail(sel) : null,
+      close: () => this.setState({ selected: null }, () => {
+        this.paint();
+        [0, 60, 160, 320].forEach(ms => this.later(ms));
+      }),
+      themeBtnRef: this.themeBtnRef,
+      toggleTheme: () => this.setTheme(!this.dark),
+      mapRef: this.mapRef,
+    };
+  }
+}
+</script>
+</body>
+</html>

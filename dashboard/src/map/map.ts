@@ -11,8 +11,11 @@ import {
   type MapLayerMouseEvent,
   type VectorTileSource,
 } from 'maplibre-gl';
+// Side-effect import: must run before any Map is constructed. See worker.ts.
+import './worker.ts';
 import { basemapStyle } from './basemap.ts';
 import {
+  BASE_INDIVIDUAL_FILTER,
   LAYER_AGGREGATE,
   LAYER_INDIVIDUAL,
   SOURCE_ID,
@@ -21,6 +24,9 @@ import {
   individualLayer,
 } from './layers.ts';
 import { installTileAuthRecovery, refreshTokenCache, transformRequest } from './tile-auth.ts';
+import { SEVERITY_TIERS, UNRATED_LABEL } from '../severity.ts';
+import type { ExpressionSpecification, FilterSpecification } from '@maplibre/maplibre-gl-style-spec';
+import { currentTheme, type Theme } from '../theme.ts';
 
 /**
  * Above this zoom the server returns individual clusters; at or below it,
@@ -56,6 +62,8 @@ export interface PotholeMapOptions {
   onSelect: (clusterId: string) => void;
   onViewChange: (view: MapView) => void;
   onError: (message: string) => void;
+  /** Feature under the pointer, or null when it leaves. Drives the dock readout. */
+  onHover?: (feature: Record<string, unknown> | null) => void;
 }
 
 export class PotholeMap {
@@ -68,7 +76,7 @@ export class PotholeMap {
 
     this.map = new MapLibreMap({
       container: options.container,
-      style: basemapStyle(),
+      style: basemapStyle(currentTheme()),
       center: [options.initialView.lon, options.initialView.lat],
       zoom: options.initialView.zoom,
       attributionControl: { compact: true },
@@ -118,6 +126,15 @@ export class PotholeMap {
         this.map.getCanvas().style.cursor = '';
       });
     }
+
+    // Readout on the individual layer only: an aggregate bin has no severity or
+    // device count to report, and showing its point_count in the same pill would
+    // read as if one defect had 40 devices.
+    this.map.on('mousemove', LAYER_INDIVIDUAL, (e: MapLayerMouseEvent) => {
+      const properties = e.features?.[0]?.properties;
+      if (properties) this.options.onHover?.(properties);
+    });
+    this.map.on('mouseleave', LAYER_INDIVIDUAL, () => this.options.onHover?.(null));
   }
 
   private tiles(): string[] {
@@ -159,6 +176,99 @@ export class PotholeMap {
     if (assetType === this.assetType) return;
     this.assetType = assetType;
     this.reloadTiles();
+  }
+
+  /**
+   * Re-style for a theme change.
+   *
+   * The basemap is a whole flavor, not a handful of paint properties — dozens of
+   * layers change — so this swaps the style rather than patching it.
+   *
+   * Two consequences worth knowing. `setStyle` discards imperatively added
+   * sources and layers, so the cluster source has to be rebuilt; that rebuild is
+   * also what repaints the markers, because layers.ts resolves tokens through
+   * `cssVar` at call time and theme.ts sets `data-theme` synchronously before we
+   * get here. And feature state goes with the source, so an optimistic repair
+   * flag set by markRepairedOptimistically is dropped — after a theme flip the
+   * next tile fetch is the source of truth, which is correct but is a behaviour
+   * change rather than an accident.
+   */
+  applyTheme(theme: Theme): void {
+    this.map.setStyle(basemapStyle(theme));
+    // `styledata` rather than `style.load`: the latter does not fire on setStyle
+    // in every path. Guarded because the event can arrive more than once.
+    this.map.once('styledata', () => {
+      if (!this.map.getSource(SOURCE_ID)) this.addClusterLayers();
+    });
+  }
+
+  /** Current viewport as a lon/lat bbox, for the stats query. */
+  bounds(): { minLon: number; minLat: number; maxLon: number; maxLat: number } {
+    const b = this.map.getBounds();
+    return {
+      minLon: b.getWest(),
+      minLat: b.getSouth(),
+      maxLon: b.getEast(),
+      maxLat: b.getNorth(),
+    };
+  }
+
+  /**
+   * Show only the selected severity tiers and a minimum corroboration level.
+   *
+   * Client-side rather than a tile parameter, because it has to be instant — a
+   * chip that costs a network round trip stops feeling like a filter. It is also
+   * the only way to express this: the tile route's `severity_min` cannot describe
+   * a tier *band*, and cannot select unrated clusters at all, since a NULL
+   * severity fails `>= $8`.
+   *
+   * The counts on the chips and in the legend deliberately do NOT come from here.
+   * They come from the stats endpoint, so they stay exact regardless of what the
+   * per-tile cap dropped. See stats.ts.
+   *
+   * Applies to the individual layer only. Aggregate bins carry neither attribute,
+   * so filtering them would empty the low zooms rather than filter them; the dock
+   * says so instead.
+   */
+  setClusterFilter(selectedTiers: ReadonlySet<string>, minDevices: number): void {
+    if (!this.map.getLayer(LAYER_INDIVIDUAL)) return;
+
+    const everyTier = selectedTiers.size === SEVERITY_TIERS.length + 1;
+    if (everyTier && minDevices <= 1) {
+      this.map.setFilter(LAYER_INDIVIDUAL, BASE_INDIVIDUAL_FILTER);
+      return;
+    }
+
+    const clauses: ExpressionSpecification[] = [];
+    if (selectedTiers.has(UNRATED_LABEL)) {
+      // ST_AsMVT omits null attributes entirely, so "unrated" is an absent key.
+      clauses.push(['!', ['has', 'severity']]);
+    }
+    for (const [i, tier] of SEVERITY_TIERS.entries()) {
+      if (!selectedTiers.has(tier.label)) continue;
+      const next = SEVERITY_TIERS[i + 1];
+      const bounded: ExpressionSpecification[] = [
+        ['has', 'severity'],
+        ['>=', ['get', 'severity'], tier.min],
+      ];
+      if (next) bounded.push(['<', ['get', 'severity'], next.min]);
+      clauses.push(['all', ...bounded]);
+    }
+
+    const filter: FilterSpecification = [
+      'all',
+      BASE_INDIVIDUAL_FILTER,
+      // An empty selection must hide everything, not fall through to showing
+      // everything — `['any']` with no clauses evaluates false, which is right.
+      ['any', ...clauses],
+      ['>=', ['coalesce', ['get', 'distinct_devices'], 0], minDevices],
+    ];
+    this.map.setFilter(LAYER_INDIVIDUAL, filter);
+  }
+
+  /** MapLibre does not watch its container; the shell's ResizeObserver calls this. */
+  resize(): void {
+    this.map.resize();
   }
 
   /** Force a tile refetch (cache-busted). */

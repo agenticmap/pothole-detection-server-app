@@ -6,57 +6,115 @@
  *
  * Light-first on purpose: basemaps are light, municipal offices are bright, and
  * these views get printed.
+ *
+ * Palette: Organic — a warm cream ground with a terracotta accent and a sage
+ * second accent. Values come from the design system's OKLCH ramps, where each
+ * step of any role carries the same perceptual lightness as that step of the
+ * others. The private --ramp-* block below is the raw scale; every semantic
+ * token above it points into that scale, so a re-theme edits one block.
  */
 
 :root {
-  /* ── Surfaces & text ─────────────────────────────────────────────────── */
-  --color-canvas: #f1f5f9;
-  --color-surface: #ffffff;
-  --color-surface-sunken: #f8fafc;
-  --color-surface-hover: #f1f5f9;
-  --color-border: #e2e8f0;
-  --color-border-strong: #cbd5e1;
+  /* ── Raw ramps (private — do not use in components) ─────────────────────
+   * Only this file may read these. Components use the semantic names below.  */
+  --ramp-neutral-100: #f9f4ed;
+  --ramp-neutral-200: #eee7db;
+  --ramp-neutral-300: #dcd3c4;
+  --ramp-neutral-400: #c0b6a5;
+  --ramp-neutral-500: #a19786;
+  --ramp-neutral-600: #82796a;
+  --ramp-neutral-700: #645c50;
+  --ramp-neutral-800: #474238;
+  --ramp-neutral-900: #2e2b25;
 
-  --color-text: #0f172a;
-  --color-text-muted: #475569;
-  --color-text-subtle: #64748b;
-  --color-text-inverse: #ffffff;
+  --ramp-accent-100: #fff2eb;
+  --ramp-accent-200: #ffe1d0;
+  --ramp-accent-300: #ffc6a5;
+  --ramp-accent-400: #f6a06b;
+  --ramp-accent-500: #d67f48;
+  --ramp-accent-600: #b2622d;
+  --ramp-accent-700: #8c491a;
+  --ramp-accent-800: #643312;
+  --ramp-accent-900: #402310;
+
+  --ramp-sage-100: #f0fae1;
+  --ramp-sage-200: #e1eecc;
+  --ramp-sage-300: #ccdbb2;
+  --ramp-sage-400: #aebf92;
+  --ramp-sage-500: #8fa073;
+  --ramp-sage-600: #728157;
+  --ramp-sage-700: #56633f;
+  --ramp-sage-800: #3d472b;
+  --ramp-sage-900: #272e1b;
+
+  /* ── Surfaces & text ─────────────────────────────────────────────────── */
+  /* The ground is the warm cream; cards sit ON it in a lighter tint, which is
+   * the inverse of the old grey-canvas/white-card relationship. */
+  --color-canvas: #f5ead8;
+  --color-surface: var(--ramp-neutral-100);
+  --color-surface-sunken: var(--ramp-neutral-200);
+  --color-surface-hover: var(--ramp-neutral-200);
+  --color-border: var(--ramp-neutral-300);
+  --color-border-strong: var(--ramp-neutral-400);
+
+  --color-text: #201e1d;
+  --color-text-muted: var(--ramp-neutral-700);
+  --color-text-subtle: var(--ramp-neutral-600);
+  --color-text-inverse: #f9f4ed;
+
+  /* Second voice — the sage ramp. Use it for corroboration, citizen-sourced
+   * data and "in progress", never for severity. */
+  --color-accent-2: #7a8a5e;
+  --color-accent-2-subtle: var(--ramp-sage-200);
+  --color-accent-2-text: var(--ramp-sage-800);
 
   /* ── Interactive ─────────────────────────────────────────────────────── */
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-primary-subtle: #eff6ff;
-  --color-focus: #2563eb;
+  --color-primary: #c67139;
+  --color-primary-hover: var(--ramp-accent-600);
+  --color-primary-subtle: var(--ramp-accent-100);
+  --color-focus: #c67139;
 
   /* Destructive is reserved for destructive actions. It is deliberately NOT
    * part of the severity ramp: if the ramp's red also means "error", neither
-   * signal means anything. */
-  --color-danger: #dc2626;
-  --color-success: #15803d;
+   * signal means anything.
+   *
+   * On this warm ground a blue-red reads as foreign, so danger is the deepest
+   * step of the accent ramp — still clearly hotter than any severity tier
+   * because it only ever appears on buttons and error text, never on markers. */
+  --color-danger: #8c1f10;
+  --color-success: var(--ramp-sage-700);
 
   /* ── Severity ramp ───────────────────────────────────────────────────────
    * Severity is ORDINAL, so it gets a sequential ramp, not red/amber/green.
    * RAG is the category cliché and the worst case for the commonest colour
-   * vision deficiency. This is a ColorBrewer YlOrRd-family ramp: it contains no
-   * green at all (so red/green confusion cannot arise) and is monotonic in
-   * lightness (so it still reads correctly under CVD simulation, and in the
-   * greyscale printout a works crew actually carries).
+   * vision deficiency.
+   *
+   * This ramp is warmed into the Organic palette but keeps every property the
+   * previous ColorBrewer YlOrRd ramp was chosen for: no green at all (so
+   * red/green confusion cannot arise) and monotonic in lightness — L* runs
+   * roughly 85 → 71 → 57 → 40 — so it still reads correctly under CVD
+   * simulation and in the greyscale printout a works crew actually carries.
+   * If you re-theme, preserve that lightness run.
    *
    * Colour is never the only channel — marker radius also scales with severity
    * and the panel prints the number. */
-  --severity-1: #fed976; /* lightest — least severe */
-  --severity-2: #feb24c;
-  --severity-3: #fc4e2a;
-  --severity-4: #b10026; /* darkest — most severe */
-  --severity-unknown: #94a3b8;
+  --severity-1: #f2cf9b; /* lightest — least severe */
+  --severity-2: #e0a163;
+  --severity-3: #c67139;
+  --severity-4: #8c491a; /* darkest — most severe */
+  --severity-unknown: var(--ramp-neutral-500);
 
   /* Repaired sits deliberately OFF the ramp. A repaired defect is a different
    * kind of thing, not a low severity. */
-  --color-repaired: #64748b;
+  --color-repaired: #7d7364;
 
-  --marker-halo: #ffffff;
+  /* The halo is the ground, not white — markers read as cut out of the map. */
+  --marker-halo: #f9f4ed;
 
-  /* ── Spacing — dense operator console, 4px rhythm ────────────────────── */
+  /* ── Spacing — dense operator console, 4px rhythm ─────────────────────
+   * Kept at 4px. Organic's 1.10× density applies to editorial pages; a console
+   * that shows 40 fields in a panel needs the tighter rhythm. Air comes from
+   * the rounded floating surfaces instead. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -64,21 +122,33 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  /* ── Shape & elevation ───────────────────────────────────────────────── */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
-  --shadow-md: 0 2px 8px rgb(15 23 42 / 0.1);
-  --shadow-lg: 0 8px 24px rgb(15 23 42 / 0.12);
+  /* ── Shape & elevation ─────────────────────────────────────────────────
+   * Over-rounded per Organic: containers at 16px, floating surfaces at 20px,
+   * and a pill token for buttons, inputs and chips. */
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+
+  /* Elevation is ink-tinted and warm, tuned to the cream ground. Floating
+   * surfaces carry shadow INSTEAD of a border — do not use both. */
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
 
   /* ── Layout ──────────────────────────────────────────────────────────── */
-  --rail-width: 56px;
-  --topbar-height: 56px;
-  --panel-width: 400px;
+  --rail-width: 76px;
+  --topbar-height: 64px;
+  --panel-width: 420px;
+  /* The floating dock of KPIs, filters and the hover readout. */
+  --dock-width: 322px;
 
-  /* ── Type ────────────────────────────────────────────────────────────── */
-  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* ── Type ──────────────────────────────────────────────────────────────
+   * Figtree for the interface, Caprasimo as the display voice — headings,
+   * panel section titles and KPI figures only, never data or prose. Load both
+   * in index.html; the system-ui fallback keeps the console usable offline. */
+  --font-ui: 'Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Caprasimo', Georgia, serif;
   /* Monospace ONLY for identifiers and coordinates, where character
    * disambiguation matters (clu_a4f… / lat-lon). Never for prose or headings. */
   --font-mono: ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Consolas, monospace;
@@ -94,6 +164,53 @@
   --z-panel: 20;
   --z-overlay: 40;
   --z-modal: 100;
+}
+
+/* ── Dark theme ───────────────────────────────────────────────────────────
+ * Set data-theme="dark" on <html>. Only the ramp and surface roles move; the
+ * severity ramp keeps its hues and gains a touch of lightness so the tiers stay
+ * separable against a dark basemap. */
+[data-theme='dark'] {
+  --ramp-neutral-100: #403b32;
+  --ramp-neutral-200: #4b453a;
+  --ramp-neutral-300: #5a5347;
+  --ramp-neutral-400: #82796a;
+  --ramp-neutral-500: #a19786;
+  --ramp-neutral-600: #bdb3a3;
+  --ramp-neutral-700: #cfc6b8;
+  --ramp-neutral-800: #e6ded2;
+  --ramp-neutral-900: #f9f4ed;
+
+  --color-canvas: #2e2b25;
+  --color-surface: #3a352d;
+  --color-surface-sunken: #332f28;
+  --color-surface-hover: #45402f;
+  --color-border: color-mix(in srgb, #f9f4ed 18%, transparent);
+  --color-border-strong: color-mix(in srgb, #f9f4ed 30%, transparent);
+
+  --color-text: #f9f4ed;
+  --color-text-inverse: #2e2b25;
+
+  --color-primary: var(--ramp-accent-400);
+  --color-primary-hover: var(--ramp-accent-300);
+  --color-primary-subtle: color-mix(in srgb, #f6a06b 18%, transparent);
+  --color-focus: var(--ramp-accent-400);
+
+  --color-accent-2: var(--ramp-sage-400);
+  --color-accent-2-subtle: color-mix(in srgb, #aebf92 20%, transparent);
+  --color-accent-2-text: var(--ramp-sage-200);
+
+  --severity-1: #f7dcb1;
+  --severity-2: #e8b078;
+  --severity-3: #d67f48;
+  --severity-4: #b2622d;
+  --severity-unknown: #82796a;
+  --color-repaired: #8b8171;
+  --marker-halo: #2e2b25;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 3px 10px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
 }
 
 /* Motion is functional here, never decorative — so when the user asks for less

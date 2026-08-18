@@ -378,16 +378,25 @@ handler in `app/main.py` turns into a **500**. The route therefore stats the pat
 `text/plain` for a path without a `.jpg` suffix) and `filename=` is deliberately omitted (it
 would flip `content_disposition_type` to `attachment` and download instead of render).
 
-### Tile auth: `transformRequest`, after `addProtocol` was tried and failed
+### Tile auth: `transformRequest` rather than `addProtocol`
 
-The plan called for MapLibre's `addProtocol`, on the reasoning that it owns the fetch and can
-therefore see a 401 and retry inline. **It does not work for vector tiles here.** MapLibre 6
-loads them in a Web Worker, and a protocol registered on the main thread is never consulted:
-tiles sat in `state: 'loading'` indefinitely, with **no error, no console warning, and zero
-network requests**. It was confirmed to be MapLibre's worker rather than this code by adding
-MapLibre's own public demo vector source at runtime — which hung identically. (Registering in
-the worker via `importScriptInWorkers` would work, but the access token lives on the main
-thread and would have to be shipped into the worker on every refresh.)
+> **Corrected in Phase 2.5b.** This section originally concluded that `addProtocol` "does not
+> work for vector tiles here" because MapLibre 6 loads them in a worker and "a protocol
+> registered on the main thread is never consulted." **That diagnosis was wrong**, and the
+> symptom had a different cause: MapLibre's worker script was 404ing, so *no* vector source
+> could load. See `dashboard/src/map/worker.ts`. MapLibre's own typings state that workers
+> delegate protocols they do not recognise back to the main thread, and PMTiles — which the
+> vector basemap now depends on — is their canonical `addProtocol` example.
+
+`addProtocol` was tried first, on the reasoning that it owns the fetch and can therefore see a
+401 and retry inline. Tiles sat in `state: 'loading'` indefinitely, with **no error, no console
+warning, and zero network requests**. Adding MapLibre's own public demo vector source at runtime
+reproduced it exactly — which was read at the time as proof that the worker ignored the
+protocol, when in fact it was the tell that *nothing vector-based worked at all*.
+
+`transformRequest` remains the right tool for the authenticated cluster tiles regardless, for
+the reasons below: it keeps the access token on the main thread, where the refresh logic lives.
+`addProtocol` is now also in use, for `pmtiles://` — and it works.
 
 `transformRequest` works because it runs on the **main thread** while the tile URL is being
 built, and its headers travel with the request into the worker. Two rules make it safe:

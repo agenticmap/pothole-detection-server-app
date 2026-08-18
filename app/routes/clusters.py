@@ -35,11 +35,17 @@ from fastapi.responses import FileResponse
 from app.config import settings
 from app.dependencies import DbPool, StaffOrAboveLive, ViewerOrAbove
 from app.models.clusters import ClusterDetailResponse, RepairRequest, RepairResponse
+from app.models.stats import ClusterStatsResponse
+
+# Reused rather than re-derived: it already rejects malformed and out-of-range
+# boxes and caps the longitude span to dodge PostGIS's antipodal-edge error.
+from app.routes.potholes import _parse_bbox
 from app.services.cluster_detail_service import (
     MAX_FRAMES,
     get_cluster_detail,
     get_frame_storage_url,
 )
+from app.services.cluster_stats_service import MAX_TIERS, StatsFilter, get_cluster_stats
 from app.services.frame_service import (
     download_frame_bytes_supabase,
     resolve_local_frame_path,
@@ -53,6 +59,57 @@ router = APIRouter(prefix="/api/v1", tags=["clusters"])
 # This is the only route doing per-request disk I/O, and nothing else bounds it —
 # check_rate_limit is device-keyed and ingest-only. Mirrors tile_service's cap.
 _image_semaphore = asyncio.Semaphore(settings.tile_max_concurrency)
+
+
+# ── Viewport statistics (Phase 2.5b) ──────────────────────────────────────────
+# Registered BEFORE /clusters/{cluster_id}: Starlette matches in registration
+# order, and "stats" would otherwise be swallowed as a cluster id and 404.
+@router.get("/clusters/stats", response_model=ClusterStatsResponse)
+async def get_stats(
+    pool: DbPool,
+    _user: ViewerOrAbove,
+    bbox: str = Query(description="minLon,minLat,maxLon,maxLat"),
+    asset_type: str = Query(default="pothole", max_length=64),
+    window_days: int = Query(default=0, ge=0, le=365),
+    tiers: str = Query(
+        default="0,0.25,0.5,0.75",
+        description="Ascending severity tier floors. Must match the client's ramp.",
+    ),
+) -> ClusterStatsResponse:
+    """Counts for the clusters currently in view, for the dashboard's KPI card.
+
+    The tier floors are a PARAMETER rather than a server constant on purpose. The
+    severity ramp is a client concern (dashboard/src/severity.ts); duplicating the
+    boundaries here would create a second copy to drift out of step, and the first
+    symptom would be a legend that disagrees with its own map.
+    """
+    min_lon, min_lat, max_lon, max_lat = _parse_bbox(bbox)
+
+    try:
+        floors = tuple(float(part) for part in tiers.split(","))
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="tiers must be comma-separated numbers."
+        ) from None
+    if not 1 <= len(floors) <= MAX_TIERS:
+        raise HTTPException(status_code=400, detail=f"tiers must have 1 to {MAX_TIERS} entries.")
+    if any(b <= a for a, b in zip(floors, floors[1:], strict=False)):
+        raise HTTPException(status_code=400, detail="tiers must be strictly ascending.")
+
+    stats = await get_cluster_stats(
+        pool,
+        StatsFilter(
+            min_lon=min_lon,
+            min_lat=min_lat,
+            max_lon=max_lon,
+            max_lat=max_lat,
+            asset_type=asset_type,
+            # Matches the tile route's convention: 0 means "the configured window".
+            window_days=window_days or settings.cluster_window_days,
+            tiers=floors,
+        ),
+    )
+    return ClusterStatsResponse(**stats)
 
 
 @router.get("/clusters/{cluster_id}", response_model=ClusterDetailResponse)

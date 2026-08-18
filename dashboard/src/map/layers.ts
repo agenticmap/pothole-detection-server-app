@@ -33,6 +33,15 @@ export const SOURCE_LAYER = 'clusters';
 export const LAYER_INDIVIDUAL = 'clusters-individual';
 export const LAYER_AGGREGATE = 'clusters-aggregate';
 
+/**
+ * What makes a feature an individual cluster rather than an aggregate bin.
+ *
+ * Exported because the dock's filter has to AND onto it: replacing the layer
+ * filter outright would let aggregate bins render through the individual layer
+ * at low zoom, painted off a `severity` they do not have.
+ */
+export const BASE_INDIVIDUAL_FILTER: ExpressionSpecification = ['!', ['has', 'point_count']];
+
 /** True when the feature is repaired, by tile attribute or optimistic feature state. */
 const IS_REPAIRED: ExpressionSpecification = [
   'any',
@@ -57,7 +66,7 @@ export function individualLayer(): CircleLayerSpecification {
     type: 'circle',
     source: SOURCE_ID,
     'source-layer': SOURCE_LAYER,
-    filter: ['!', ['has', 'point_count']],
+    filter: BASE_INDIVIDUAL_FILTER,
     paint: {
       'circle-color': ['case', IS_REPAIRED, repairedColor(), severityColorExpression()],
       'circle-radius': [
@@ -82,10 +91,12 @@ export function individualLayer(): CircleLayerSpecification {
 /**
  * Low-zoom aggregate bins.
  *
- * Count is encoded by radius rather than a numeric label because the style
- * declares no `glyphs` URL — a `text-field` without one is a style validation
- * failure and the numbers silently never render. Adding labels later means
- * self-hosting one font range under `public/font/`.
+ * Count is encoded by radius rather than a numeric label. That was originally a
+ * hard constraint — the raster style declared no `glyphs` URL, and a `text-field`
+ * without one silently renders nothing — but the Protomaps basemap declares
+ * glyphs, so a numeric label is now possible. Radius is kept because it is the
+ * channel that survives colour-vision deficiency and greyscale printing; adding
+ * a label on top would be an improvement, not a fix.
  */
 export function aggregateLayer(): CircleLayerSpecification {
   return {

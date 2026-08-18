@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # Built bundle, mounted at /dashboard when present. Relative paths resolve
     # against the repo root, not the CWD — uvicorn is not always launched from it.
     dashboard_dist_path: str = "dashboard/dist"
+    # Protomaps PMTiles archive for the map background. A build artefact, not
+    # source — see dashboard/README.md for how to regenerate it.
+    basemap_path: str = "storage/basemap"
 
     # ── Operator dashboard vector tiles (Phase 2.5) ─────────────────────────────
     # At or below this zoom a tile is grid-aggregated. Measured on 20k synthetic

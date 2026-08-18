@@ -38,3 +38,6 @@ dist/
 node_modules/
 *.tsbuildinfo
 .env.local
+
+# Playwright MCP scratch output
+.playwright-mcp/

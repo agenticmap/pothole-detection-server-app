@@ -109,6 +109,31 @@ else:
     )
 
 
+# ── Basemap archive (Phase 2.5b) ──────────────────────────────────────────────
+# One PMTiles file served over HTTP range requests — there is no basemap tile
+# server. Starlette's FileResponse implements Range, which is the whole
+# mechanism: without it a client would pull the entire archive to read one tile.
+#
+# Deliberately unauthenticated. It is public OpenStreetMap data, and the pmtiles
+# protocol handler owns its own fetch, so the dashboard's transformRequest never
+# sees these requests and could not attach a bearer to them anyway.
+#
+# Same load-bearing isdir() guard as the dashboard mount above.
+_basemap_dir = Path(settings.basemap_path)
+if not _basemap_dir.is_absolute():
+    _basemap_dir = Path(__file__).resolve().parent.parent / _basemap_dir
+
+if _basemap_dir.is_dir():
+    app.mount("/basemap", StaticFiles(directory=str(_basemap_dir)), name="basemap")
+    logger.info("Basemap archive mounted at /basemap from %s", _basemap_dir)
+else:
+    logger.info(
+        "No basemap archive at %s — /basemap not mounted, the map will have no "
+        "background. See dashboard/README.md to generate one.",
+        _basemap_dir,
+    )
+
+
 # ── Global Exception Handler ──────────────────────────────────────────────────
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):

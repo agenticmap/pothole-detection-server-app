@@ -11,6 +11,7 @@
  */
 
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec';
+import { cssVar } from './tokens.ts';
 
 export interface SeverityTier {
   /** Inclusive lower bound of the tier. */
@@ -23,21 +24,30 @@ export interface SeverityTier {
 }
 
 /**
- * Tier boundaries. `asset_cluster.severity` is an IRI-style figure produced by
- * app/sensor_model — unbounded in principle, in practice single digits. Tiers are
- * a first cut and should be recalibrated against real drive data before a pilot.
+ * Tier boundaries, on the unit scale the pipeline actually emits.
+ *
+ * `asset_cluster.severity` is the median of its members' `sensor_severity`
+ * (app/fusion/service.py), and that is an IRI-style proxy **hard-clamped to
+ * [0, 1]** by app/sensor_model/features.py:
+ *
+ *     severity = clamp(severity_scale * magnitude / max(speed, severity_speed_ref), 0, 1)
+ *
+ * with `severity_scale = 2.0` and `severity_speed_ref = 5.0` (app/config.py).
+ * An earlier version of this file described severity as "unbounded in principle,
+ * in practice single digits" and put the floors at 0 / 1.5 / 3 / 5 — above the
+ * ceiling. Every real cluster therefore painted in the first tier at the smallest
+ * radius, and three of the four ramp colours were unreachable.
+ *
+ * These floors are still a first cut: quartiles of the possible range, not of the
+ * observed distribution. They should be recalibrated against real drive data
+ * before a pilot — that caveat is more true now, not less.
  */
 export const SEVERITY_TIERS: readonly SeverityTier[] = [
   { min: 0, label: 'Low', varName: '--severity-1', radius: 5 },
-  { min: 1.5, label: 'Moderate', varName: '--severity-2', radius: 7 },
-  { min: 3, label: 'High', varName: '--severity-3', radius: 9 },
-  { min: 5, label: 'Severe', varName: '--severity-4', radius: 11 },
+  { min: 0.25, label: 'Moderate', varName: '--severity-2', radius: 7 },
+  { min: 0.5, label: 'High', varName: '--severity-3', radius: 9 },
+  { min: 0.75, label: 'Severe', varName: '--severity-4', radius: 11 },
 ];
-
-function cssVar(name: string): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name);
-  return value.trim();
-}
 
 /** Resolve a token to its literal colour — MapLibre paint cannot read CSS vars. */
 export function severityColors(): string[] {
@@ -56,6 +66,9 @@ export function haloColor(): string {
   return cssVar('--marker-halo');
 }
 
+/** The label for a cluster with no severity score. Also a filter key in the dock. */
+export const UNRATED_LABEL = 'Unrated';
+
 export function tierFor(severity: number | null | undefined): SeverityTier | null {
   if (severity === null || severity === undefined || Number.isNaN(severity)) return null;
   let match: SeverityTier | null = null;
@@ -66,7 +79,7 @@ export function tierFor(severity: number | null | undefined): SeverityTier | nul
 }
 
 export function severityLabel(severity: number | null | undefined): string {
-  return tierFor(severity)?.label ?? 'Unrated';
+  return tierFor(severity)?.label ?? UNRATED_LABEL;
 }
 
 /**

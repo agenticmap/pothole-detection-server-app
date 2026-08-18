@@ -18,7 +18,11 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
+export async function request(
+  path: string,
+  init: RequestInit = {},
+  retried = false,
+): Promise<Response> {
   const token = await getAccessToken();
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${token}`);

@@ -5,12 +5,28 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './tokens.css';
 import './styles.css';
+// The Organic skin is an override layer, not a replacement — it targets the same
+// class names styles.css defines and wins only by loading last.
+import './organic-shell.css';
 
 import { AuthError, clearSession, currentSession, isLoggedIn, login, onSessionExpired } from './auth.ts';
 import { el } from './dom.ts';
 import { PotholeMap, type MapView } from './map/map.ts';
 import { DetailPanel } from './panel/panel.ts';
-import { buildShell, readUrlState, writeUrlState } from './shell.ts';
+import {
+  buildShell,
+  installLegendResponsiveness,
+  readUrlState,
+  refreshLegend,
+  setLegendCounts,
+  writeUrlState,
+} from './shell.ts';
+import { Dock } from './dock.ts';
+import { getStats } from './stats.ts';
+import { initTheme } from './theme.ts';
+
+// Applied before the first render so there is no light flash on a dark-theme load.
+initTheme();
 
 /** No extent endpoint exists, so the initial view is configured, not discovered. */
 const DEFAULT_VIEW: MapView = {
@@ -26,6 +42,7 @@ if (!root) throw new Error('#app not found');
 
 let map: PotholeMap | null = null;
 let panel: DetailPanel | null = null;
+let dock: Dock | null = null;
 
 function renderLogin(message?: string): void {
   const emailInput = el('input', {
@@ -91,7 +108,7 @@ function renderApp(): void {
     root!,
     {
       assetType,
-      userEmail: session.userId,
+      userEmail: session.email ?? session.userId,
       orgId: session.orgId,
       role: session.role || 'unknown',
     },
@@ -104,9 +121,17 @@ function renderApp(): void {
       onSignOut: () => {
         clearSession();
         map?.destroy();
+        dock?.destroy();
         map = null;
         panel = null;
+        dock = null;
         renderLogin();
+      },
+      onThemeChange: (theme) => {
+        // The chrome re-themes itself from the token block; the map and the
+        // legend do not, because both bake CSS variables into literal values.
+        map?.applyTheme(theme);
+        refreshLegend();
       },
     },
   );
@@ -133,6 +158,12 @@ function renderApp(): void {
     canRepair: () => session.role === 'staff' || session.role === 'admin',
   });
 
+  dock = new Dock(mapContainer, {
+    onFilterChange: (filter) => {
+      map?.setClusterFilter(filter.tiers, filter.minDevices);
+    },
+  });
+
   map = new PotholeMap({
     container: mapContainer,
     initialView: view,
@@ -142,12 +173,47 @@ function renderApp(): void {
       sync();
       void panel?.open(clusterId);
     },
-    onViewChange: () => sync(),
+    onViewChange: () => {
+      sync();
+      scheduleStats();
+    },
+    onHover: (feature) => dock?.setReadout(feature),
     onError: () => {
-      // Tile auth is handled inside the custom protocol; anything else is
-      // usually the basemap and is not worth interrupting the operator for.
+      // Tile auth is handled by installTileAuthRecovery; anything else is usually
+      // the basemap and is not worth interrupting the operator for.
     },
   });
+
+  // ── Viewport statistics ─────────────────────────────────────────────────────
+  // Debounced, and every request carries an AbortController so a fast pan cannot
+  // land an older response on top of a newer one — the same discipline panel.ts
+  // uses for cluster detail.
+  let statsTimer: ReturnType<typeof setTimeout> | null = null;
+  let statsRequest: AbortController | null = null;
+
+  function scheduleStats(): void {
+    if (statsTimer !== null) clearTimeout(statsTimer);
+    statsTimer = setTimeout(() => void fetchStats(), 300);
+  }
+
+  async function fetchStats(): Promise<void> {
+    if (!map || !dock) return;
+    statsRequest?.abort();
+    const controller = new AbortController();
+    statsRequest = controller;
+    try {
+      const stats = await getStats(map.bounds(), assetType, controller.signal);
+      dock.update(stats);
+      setLegendCounts(stats.tier_counts, stats.unrated, stats.repaired);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      // A failed count must not leave a stale one on screen looking current.
+      dock.setUnavailable();
+      setLegendCounts(null, null, null);
+      // eslint-disable-next-line no-console
+      console.warn('[stats]', err);
+    }
+  }
 
   // An empty view is a normal state, not a broken one — say so rather than
   // leaving a blank map that looks like a failure.
@@ -159,7 +225,13 @@ function renderApp(): void {
         ? 'No potholes in this view. Pan or zoom out to find collected data.'
         : 'Zoom in past level 13 to see individual potholes.';
     }
+    // The chips filter attributes that only individual features carry.
+    dock?.setFiltersApply(map?.isDetailZoom() ?? false);
   });
+
+  installLegendResponsiveness(mapContainer, () => map?.resize());
+
+  void fetchStats();
 
   if (selected) void panel.open(selected);
   sync();

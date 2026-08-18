@@ -29,6 +29,15 @@ export interface Session {
   userId: string;
   orgId: string;
   role: StaffRole;
+  /**
+   * The address this operator signed in with.
+   *
+   * Not from the token: `sub` carries `user:<id>` and there is no email claim,
+   * so without this the top bar shows a raw `usr_…` id, which reads as a bug.
+   * Held separately from `session` because a refresh rebuilds the session from
+   * the token and would otherwise drop it.
+   */
+  email: string | null;
 }
 
 /** Refresh this long before expiry, so the map never rides a stale token. */
@@ -38,6 +47,8 @@ let accessToken: string | null = null;
 let refreshToken: string | null = null;
 let expiresAt = 0;
 let session: Session | null = null;
+// Survives token refresh, which rebuilds `session` from the new token's claims.
+let signedInEmail: string | null = null;
 let inFlightRefresh: Promise<string> | null = null;
 let onExpiredCallback: (() => void) | null = null;
 
@@ -72,6 +83,7 @@ function adopt(pair: TokenPair): void {
   const claims = decodeClaims(pair.access_token);
   const sub = typeof claims.sub === 'string' ? claims.sub : '';
   session = {
+    email: signedInEmail,
     userId: sub.startsWith('user:') ? sub.slice(5) : sub,
     orgId: typeof claims.org === 'string' ? claims.org : '',
     // The role is a UI hint only. The server enforces it independently, and on
@@ -85,6 +97,7 @@ export function clearSession(): void {
   refreshToken = null;
   expiresAt = 0;
   session = null;
+  signedInEmail = null;
   inFlightRefresh = null;
 }
 
@@ -117,6 +130,7 @@ export async function login(email: string, password: string): Promise<void> {
   if (!res.ok) {
     throw new AuthError(await readError(res));
   }
+  signedInEmail = email;
   adopt((await res.json()) as TokenPair);
 }
 
