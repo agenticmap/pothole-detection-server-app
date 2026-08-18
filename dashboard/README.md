@@ -37,6 +37,9 @@ cd .. && POTHOLE_STAFF_PASSWORD='…' python scripts/create_staff.py \
 
 `viewer` sees everything but no repair control; `staff` and `admin` can mark repairs.
 
+For a throwaway account against the test database — with 120 synthetic clusters to look at —
+use the ready-made one under [Demo data](#demo-data) instead.
+
 ### Set `AUTH_JWT_PRIVATE_KEY_PEM` before you start
 
 Without it the server mints an **ephemeral signing key per process**, so every `--reload` logs
@@ -151,17 +154,50 @@ because a third-party origin is having a bad day. Self-hosting them under
 
 ### Demo data
 
+Order matters for the first two — the seed attaches its repair history to whichever staff
+account already exists, so creating the account first is what makes the detail panel show an
+operator's email rather than a raw `usr_…` id.
+
 ```bash
-DATABASE_URL=postgresql://pothole:pothole@localhost:5433/pothole_test \
-  python scripts/seed_demo.py --reset
+export DATABASE_URL=postgresql://pothole:pothole@localhost:5433/pothole_test
+
+# 1. The demo operator
+POTHOLE_STAFF_PASSWORD='roadwatch-demo' python scripts/create_staff.py \
+    --org org_demo --name "RoadWatch Demo" \
+    --email ops@example.com --role admin --full-name "Demo Operator"
+
+# 2. The clusters
+python scripts/seed_demo.py --reset
+
+# 3. Serve it. The dev container on :8000 points at pothole_db, which is real data.
+uvicorn app.main:app --port 8010
+#   → http://localhost:8010/dashboard/
 ```
 
+**Demo credentials**
+
+| | |
+|---|---|
+| Email | `ops@example.com` |
+| Password | `roadwatch-demo` |
+| Org / role | `org_demo` / `admin` |
+
+These are **throwaway local-only credentials for a database that every test run wipes**. They
+are written down because the alternative is re-deriving them each time, and because
+`ops@example.com` cannot receive mail and `pothole_test` holds nothing real. Do not reuse this
+password elsewhere, and do not provision this account against `pothole_db` or a deployed
+server — `scripts/create_staff.py` creates it wherever `DATABASE_URL` happens to point.
+
+Use `admin` or `staff` if you want to exercise repair marking; `viewer` sees everything but
+gets no repair control.
+
 120 deterministic synthetic clusters over Toronto, with observations, camera frames (real JPEGs
-on disk), and repair history. It refuses to run against any database but `pothole_test` /
-`pothole_ci`, mirroring the guard in `tests/conftest.py`.
+on disk), and repair history. `seed_demo.py` refuses to run against any database but
+`pothole_test` / `pothole_ci`, mirroring the guard in `tests/conftest.py`.
 
 Note that **`pytest` TRUNCATEs every table**, so a test run wipes the seed *and* the staff
-account. Re-run `scripts/create_staff.py` and then `seed_demo.py` afterwards.
+account. Re-run steps 1 and 2 afterwards.
+
 
 ### Things that will bite you (continued)
 
