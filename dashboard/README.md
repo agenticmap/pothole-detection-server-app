@@ -161,10 +161,14 @@ operator's email rather than a raw `usr_…` id.
 ```bash
 export DATABASE_URL=postgresql://pothole:pothole@localhost:5433/pothole_test
 
-# 1. The demo operator
+# 1. The demo accounts — an admin and a viewer, so both roles can be exercised
 POTHOLE_STAFF_PASSWORD='roadwatch-demo' python scripts/create_staff.py \
     --org org_demo --name "RoadWatch Demo" \
     --email ops@example.com --role admin --full-name "Demo Operator"
+
+POTHOLE_STAFF_PASSWORD='roadwatch-viewer' python scripts/create_staff.py \
+    --org org_demo --name "RoadWatch Demo" \
+    --email viewer@example.com --role viewer --full-name "Demo Viewer"
 
 # 2. The clusters
 python scripts/seed_demo.py --reset
@@ -174,22 +178,23 @@ uvicorn app.main:app --port 8010
 #   → http://localhost:8010/dashboard/
 ```
 
-**Demo credentials**
+**Demo credentials** — `pothole_test`, org `org_demo`
 
-| | |
-|---|---|
-| Email | `ops@example.com` |
-| Password | `roadwatch-demo` |
-| Org / role | `org_demo` / `admin` |
+| Email | Password | Role | Use it for |
+|---|---|---|---|
+| `ops@example.com` | `roadwatch-demo` | `admin` | The full console, including marking repairs |
+| `viewer@example.com` | `roadwatch-viewer` | `viewer` | Checking the read-only tier |
+
+The two roles genuinely differ, and not just in the UI: a `viewer` token reads
+`/clusters/stats` fine (200) and is refused on `POST /clusters/{id}/repair` (**403**) — verified
+against the running server. The dashboard also hides the repair control, but that is a hint, not
+the enforcement; the server re-reads `org_member` on every write.
 
 These are **throwaway local-only credentials for a database that every test run wipes**. They
 are written down because the alternative is re-deriving them each time, and because
-`ops@example.com` cannot receive mail and `pothole_test` holds nothing real. Do not reuse this
-password elsewhere, and do not provision this account against `pothole_db` or a deployed
-server — `scripts/create_staff.py` creates it wherever `DATABASE_URL` happens to point.
-
-Use `admin` or `staff` if you want to exercise repair marking; `viewer` sees everything but
-gets no repair control.
+`@example.com` cannot receive mail and `pothole_test` holds nothing real. Do not reuse these
+passwords elsewhere, and do not provision these accounts against `pothole_db` or a deployed
+server — `scripts/create_staff.py` creates them wherever `DATABASE_URL` happens to point.
 
 120 deterministic synthetic clusters over Toronto, with observations, camera frames (real JPEGs
 on disk), and repair history. `seed_demo.py` refuses to run against any database but
@@ -198,6 +203,66 @@ on disk), and repair history. `seed_demo.py` refuses to run against any database
 Note that **`pytest` TRUNCATEs every table**, so a test run wipes the seed *and* the staff
 account. Re-run steps 1 and 2 afterwards.
 
+
+### Accounts already in the dev database
+
+`pothole_db` — the database the compose stack on `:8000` uses, and the one holding the real
+collected drive data. These were provisioned during earlier phases:
+
+| Email | Role | Org | Password | Can sign in? |
+|---|---|---|---|---|
+| `ops@example.com` | `admin` | `org_test` | **not recoverable** | yes |
+| `viewer@example.com` | `viewer` | `org_test` | **not recoverable** | yes |
+| `ops@test.local` | `admin` | `org_test` | **not recoverable** | **no — see below** |
+
+**The passwords cannot be documented, because they cannot be read.** `staff_user.password_hash`
+is bcrypt, which is one-way by design — that is the property that makes the column safe to hold.
+Nothing in the repo, the logs, or the database can turn those hashes back into text. If you know
+them, they are worth writing into your own password manager rather than here; if you do not,
+reset one:
+
+```bash
+DATABASE_URL=postgresql://pothole:pothole@localhost:5433/pothole_db python - <<'PY'
+import asyncio, sys; sys.path.insert(0, ".")
+import asyncpg
+from app.auth.passwords import hash_password
+from app.config import settings
+
+EMAIL, NEW_PASSWORD = "ops@example.com", "put-a-new-one-here"
+
+async def main():
+    conn = await asyncpg.connect(settings.database_url)
+    # lower(email) to match idx_staff_user_email_lower, the same way login does.
+    print(await conn.execute(
+        "UPDATE staff_user SET password_hash = $1 WHERE lower(email) = lower($2)",
+        hash_password(NEW_PASSWORD), EMAIL))
+    await conn.close()
+
+asyncio.run(main())
+PY
+```
+
+There is no `--reset-password` flag on `scripts/create_staff.py` and no password-change endpoint;
+that gap is recorded under [Production accounts](#production-accounts).
+
+**`ops@test.local` can never log in, whatever its password is.** The login route validates with
+Pydantic's `EmailStr`, which rejects the reserved `.local` TLD, so the request 422s before any
+credential check. It predates the fix that made `create_staff.py` validate the same way
+(`docs/phase-2.5-dashboard-plan.md`), and it is safe to delete:
+
+```sql
+DELETE FROM org_member WHERE user_id = (SELECT user_id FROM staff_user WHERE email = 'ops@test.local');
+DELETE FROM staff_user WHERE email = 'ops@test.local';
+```
+
+Two things worth knowing about this set:
+
+- **`ops@example.com` exists in both databases with different passwords** — `roadwatch-demo` in
+  `pothole_test`, something else in `pothole_db`. Same address, different account, different
+  org (`org_demo` vs `org_test`). Check which database your server is pointed at before
+  concluding a password is wrong.
+- **These are not org-scoped in a way that limits them.** `asset_cluster` has no `org_id`, so an
+  `org_test` admin can repair anything; see the gap noted under Production accounts.
 
 ### Production accounts
 
