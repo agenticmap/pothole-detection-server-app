@@ -275,6 +275,10 @@ The dashboard is for **municipal operators**: dispatch supervisors, asset manage
   - *deck.gl / CesiumJS* — 3D-capable, overkill until asset heights matter (Phase 5+).
 
 **Base tiles: Protomaps PMTiles (preferred) or OpenMapTiles self-hosted**
+
+> **Implemented in Phase 2.5b.** A PMTiles archive is served from `/basemap` over HTTP range
+> requests, with the style flavour themed from the same CSS tokens as the chrome. See
+> [`phase-2.5b-dashboard-design.md`](./phase-2.5b-dashboard-design.md) §4.
 - Protomaps: a single addressable PMTiles archive per province, served from S3/R2 via HTTP range requests. **No basemap tile server needed.** ~30 GB for all of Canada at z0–14.
 - Avoids per-tile Mapbox / MapTiler billing.
 

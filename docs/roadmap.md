@@ -44,6 +44,7 @@ This document tracks the full multi-phase plan for the app. Shipped phases get a
 | 1.6 | ✅ Shipped | Real on-device YOLO + bounding-box overlay + server-fusion plumbing |
 | 2 | ✅ Built (2.0–2.4) | Server backend + sensor↔visual fusion + crowd clustering + read path + staff auth |
 | 2.5 | ✅ Shipped | Operator dashboard: vector tiles, detail panel, repair marking, and the browser console (`dashboard/`). |
+| 2.5b/c | ✅ Shipped | Dashboard design pass: Organic skin, self-hosted Protomaps vector basemap, KPI/filter dock + `/clusters/stats`, severity recalibrated to the real [0,1] scale, and a synthetic demo seed. Fixed a MapLibre worker 404 that had meant **no vector tile ever loaded**. |
 | 3 | 📋 Planned | On-device ML upgrade + labeled-data flywheel |
 | 4 | 📋 Planned | Production hardening + public release |
 

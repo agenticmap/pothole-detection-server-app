@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # RoadWatch — operator dashboard
@@ -8,9 +8,12 @@ The municipal operator console for the pothole-detection server (Phase 2.5). Map
 in, see confirmed potholes, open one, look at the camera frames behind it, mark it repaired.
 
 Design rationale, the decisions behind the odd-looking bits, and what is deliberately not
-built live in [`../docs/phase-2.5-dashboard-plan.md`](../docs/phase-2.5-dashboard-plan.md).
-**Read that before changing the tile auth or the severity encoding** — both have non-obvious
-constraints that cost real debugging time to find.
+built live in [`../docs/phase-2.5-dashboard-plan.md`](../docs/phase-2.5-dashboard-plan.md) and
+its successor [`../docs/phase-2.5b-dashboard-design.md`](../docs/phase-2.5b-dashboard-design.md)
+(the Organic redesign, the vector basemap, the dock).
+
+**Read those before changing the tile auth, the basemap palette or the severity encoding** — all
+three have non-obvious constraints that cost real debugging time to find.
 
 ## Quick start
 
@@ -79,11 +82,15 @@ src/
   dom.ts           el() / field() / plural(); textContent only, no innerHTML
   severity.ts      the ordinal ramp — colour + radius + label, one source of truth
   shell.ts         top bar, asset selector, module rail, legend, URL state
+  dock.ts          KPI + filter dock; owns the "unbacked value" policy
+  stats.ts         /clusters/stats client — every count on screen comes from here
+  tokens.ts        cssVar(), the one way JS reads a design token
   map/
     map.ts         MapLibre init, source, clicks, optimistic repaint
     tile-auth.ts   transformRequest + 401 recovery
     layers.ts      the two style layers
-    basemap.ts     raster OSM style — swap here for PMTiles
+    basemap.ts     Protomaps vector style; the Organic flavour reads --map-* tokens
+    worker.ts      setWorkerUrl — READ THIS before debugging an empty map
   panel/
     panel.ts       detail panel; one AbortController per open
     frames.ts      blob-URL images, concurrency-capped
@@ -97,9 +104,18 @@ Each of these cost real time to find. They are in the code as comments too.
 
 - **`<img src>` cannot send an `Authorization` header.** Frame images must be `fetch`ed and
   turned into blob URLs. Do not "simplify" `panel/frames.ts` back to a plain `src`.
-- **`addProtocol` does not work for vector tiles.** MapLibre 6 loads them in a Web Worker and
-  never consults a main-thread protocol; tiles hang in `state: 'loading'` with no error and no
-  network request. Use `transformRequest` — see `map/tile-auth.ts`.
+- **MapLibre's worker is a static asset, not a bundled chunk — and if it 404s, EVERY vector
+  source silently never loads.** No error, no console warning, no tile requests, just an empty
+  map. `npm run dev` and `npm run build` both run `scripts/copy-maplibre-worker.mjs` first for
+  this reason. Check the Network panel for the worker before suspecting auth, tiles or SQL. See
+  `map/worker.ts`.
+  - This corrects an earlier entry here which claimed `addProtocol` "does not work for vector
+    tiles" because the worker never consults the main thread. **That was wrong** — the worker was
+    404ing, so nothing vector-based worked at all. `addProtocol` does work, and the PMTiles
+    basemap depends on it.
+- **`transformRequest`, not `addProtocol`, for the *authenticated* cluster tiles** — see
+  `map/tile-auth.ts`. Not because the protocol hook fails, but because the access token lives on
+  the main thread where the refresh logic is.
 - **An errored tile never retries itself.** A 401 leaves the map permanently blank unless
   something forces a refetch. Hence the explicit `map.on('error')` → refresh → `setTiles`.
 - **`ST_AsMVT` omits NULL attributes entirely**, and `severity` is nullable — so every numeric
@@ -116,9 +132,13 @@ Each of these cost real time to find. They are in the code as comments too.
 
 ## Not built
 
-Filters, the inventory list, work orders, reports, dark mode, and any automated frontend
-tests. The module rail has disabled slots for the first four so adding them is additive.
-Raster OSM basemap tiles are dev-only under OSM's usage policy.
+The inventory list, work orders, reports, and any automated frontend tests. The module rail has
+disabled slots for the first three so adding them is additive.
+
+Filters and dark mode **were** built in Phase 2.5b; the basemap is no longer raster OSM. See
+[`docs/phase-2.5b-dashboard-design.md`](../docs/phase-2.5b-dashboard-design.md) for the as-built
+record, including what the dashboard deliberately does *not* claim to know (street names, KPI
+deltas) and why.
 
 ---
 

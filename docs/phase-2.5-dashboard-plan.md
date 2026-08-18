@@ -4,6 +4,10 @@ updated: 2026-08-17
 
 # Phase 2.5 — Operator dashboard
 
+> Continued by [`phase-2.5b-dashboard-design.md`](./phase-2.5b-dashboard-design.md), which
+> covers the Organic redesign, the vector basemap, the dock and the stats endpoint — and
+> which supersedes this document wherever the two disagree about the basemap.
+>
 > Status: **Steps 1–3 implemented** — vector tiles, detail panel + repair marking, and the
 > browser frontend. Step 4 (live WebSocket push) is **not started** and is arguably not worth
 > starting; see "Out of scope / next".
@@ -99,7 +103,7 @@ not exist in this deployment.
 Vite 8 + TypeScript + MapLibre GL JS 6.4, **no framework**. ~1,700 lines of TS and ~760 of
 CSS across 15 modules. Scope is the core loop only: sign in → map → click a marker → detail
 panel with frames → mark repaired. Filters, an inventory list and work orders are not built,
-but the shell has a defined slot for each.
+but the shell has a defined slot for each. (Filters and dark mode arrived in Phase 2.5b.)
 
 | Module | Responsibility |
 |---|---|
@@ -113,7 +117,7 @@ but the shell has a defined slot for each.
 | `src/map/map.ts` | MapLibre init, source, click handling, optimistic repaint |
 | `src/map/tile-auth.ts` | `transformRequest` + 401 recovery |
 | `src/map/layers.ts` | The two style layers and their paint expressions |
-| `src/map/basemap.ts` | Raster OSM style — the single swap point for PMTiles |
+| `src/map/basemap.ts` | Basemap style. **Superseded in 2.5b:** now self-hosted Protomaps PMTiles, not raster OSM |
 | `src/panel/panel.ts` | Detail panel; owns the per-open `AbortController` |
 | `src/panel/frames.ts` | Blob-URL image loading with a client-side concurrency cap |
 | `src/tokens.css` | Semantic design tokens (surfaces, severity ramp, spacing, type) |
@@ -180,8 +184,13 @@ deliberately off the ramp — slate, half opacity — because a repaired defect 
 kind of thing, not a low severity. Markers carry a 1.5px white halo so they stay legible over
 both pale roads and dark parkland.
 
-Tier boundaries are a first cut against `asset_cluster.severity` (an IRI-style figure from
-`app/sensor_model`) and **should be recalibrated against real drive data before a pilot**.
+Tier boundaries are a first cut against `asset_cluster.severity` and **should be recalibrated
+against real drive data before a pilot**.
+
+> **Corrected in Phase 2.5b.** This phase set the floors at 0 / 1.5 / 3 / 5 on the belief that
+> severity was an unbounded IRI-style figure. It is not: `app/sensor_model/features.py` clamps it
+> to **[0, 1]**, so three of the four ramp colours were unreachable and every real cluster painted
+> in the palest tier. The floors are now 0 / 0.25 / 0.5 / 0.75.
 
 ### Tokens and type
 
@@ -725,9 +734,10 @@ per panel open, the single-flight refresh) that a framework would have handled.
   which is not a regression net. A Playwright suite covering login → panel → repair would be
   the highest-value addition.
 - **Filters, inventory list, work orders, reports.** Deferred by scope. The rail has slots.
-- **Basemap.** Raster OSM tiles are **dev-only** under OSM's tile usage policy. A pilot needs
-  self-hosted Protomaps PMTiles (`src/map/basemap.ts` is the single swap point) or a paid
-  provider.
+- **Basemap.** ~~Raster OSM tiles are dev-only under OSM's tile usage policy.~~
+  **Resolved in Phase 2.5b:** replaced with a self-hosted Protomaps PMTiles archive served
+  from `/basemap`. What remains outstanding is that glyphs and sprites still load from
+  `protomaps.github.io`; see [`phase-2.5b-dashboard-design.md`](./phase-2.5b-dashboard-design.md) §4.
 - **Shipping the bundle in Docker** — needs a `node:22` build stage (see "Running it").
 - **Browser support.** MapLibre 6 requires **WebGL2**; the app shows a plain message rather
   than a blank screen if it is missing, which is realistic over RDP or in a VM.
