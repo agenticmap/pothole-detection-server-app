@@ -19,6 +19,12 @@ export interface ClusterStats {
   repaired_last_30d: number;
   /** Open clusters per tier, positionally parallel to SEVERITY_TIERS. */
   tier_counts: number[];
+  /**
+   * Open clusters per detection source. A source with none in the viewport is
+   * OMITTED, not zero — "no camera-reviewed clusters here" and "camera review
+   * contributed 0" are different claims and only the first is true.
+   */
+  source_counts: Record<string, number>;
   generated_at: string;
 }
 

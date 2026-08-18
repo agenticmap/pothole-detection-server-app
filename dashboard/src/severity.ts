@@ -66,6 +66,17 @@ export function haloColor(): string {
   return cssVar('--marker-halo');
 }
 
+/**
+ * Ring for the selected marker.
+ *
+ * The INVERSE of the halo: near-black on the light theme, cream on the dark
+ * one. A selected marker has to be findable at a glance among a hundred others,
+ * and thickening a halo that already matches the background does nothing.
+ */
+export function selectedRingColor(): string {
+  return cssVar('--color-text');
+}
+
 /** The label for a cluster with no severity score. Also a filter key in the dock. */
 export const UNRATED_LABEL = 'Unrated';
 

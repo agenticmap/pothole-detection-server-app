@@ -1,24 +1,29 @@
 /**
- * The floating dock: KPIs, severity and corroboration filters, and the hover
- * readout.
+ * The floating dock: KPIs, filters, and the hover readout.
  *
- * Structure and class names come from the design handoff — organic-shell.css
- * already styles every selector used here, so this file emits markup rather than
- * inventing layout.
+ * Structure, order and strings follow the source mockup (`RoadWatch Dashboard.dc.html`,
+ * recoverable with `git show`): provenance note, then a card carrying an eyebrow +
+ * scope heading, a 2×2 KPI grid, a divider, then Find a street → Severity tier →
+ * Detection source → Corroboration. `organic-shell.css` already styles every class
+ * used here, so this file emits markup rather than inventing layout.
  *
- * What is deliberately NOT here, and why:
+ * ## Elements the schema cannot fully back
  *
- *   - **KPI delta lines** ("−214 this month"). There is no baseline to compute
- *     them from: `asset_cluster.updated_at` is rewritten by every clustering
- *     pass, so no month-ago state survives. The mockup's deltas are placeholder
- *     text, and the handoff says to wire them to a real query or drop them.
- *   - **A street name / "Find a street" box.** No street column exists anywhere
- *     in the schema. It would need reverse geocoding and a migration.
- *   - **Detection-source chips.** `asset_cluster.source` is hardcoded 'crowd' by
- *     the clustering job, so the row would read "crowd · 100%".
+ * The mockup shows figures this database has no way to produce. They are rendered in
+ * their designed position — the layout is the design's — but never as a fabricated
+ * number, because a city may act on what this screen says. `provisional()` marks
+ * every one of them the same way, so they are greppable rather than five ad-hoc
+ * em-dashes:
  *
- * A dashboard a city makes repair decisions with should not show a number it
- * cannot stand behind, so these are absent rather than faked.
+ *   - **KPI deltas** ("−214 this month"). No month-ago baseline exists to compute
+ *     from: `asset_cluster.updated_at` is rewritten by every clustering pass.
+ *   - **Find a street.** There is no street column anywhere in the schema, so the
+ *     input renders disabled and says why.
+ *
+ * Detection-source chips ARE backed — `/clusters/stats` returns the real mix — but
+ * the clustering job only ever writes `'crowd'`, so in practice the row shows one
+ * chip. That is the truth about the data, and showing it is more informative than
+ * hiding the row.
  */
 
 import { el, formatNumber } from './dom.ts';
@@ -34,8 +39,20 @@ const DEVICE_STEPS = [
 
 const ALL_TIER_LABELS = [...SEVERITY_TIERS.map((t) => t.label), UNRATED_LABEL];
 
+/**
+ * Shown above the card when the data on screen is a fixture rather than a real
+ * collection. Set `VITE_PROVENANCE_NOTE` to the text for a demo build; unset in a
+ * real deployment, where the note would be a lie.
+ */
+const PROVENANCE_NOTE = import.meta.env['VITE_PROVENANCE_NOTE'] ?? '';
+
+const NO_BASELINE =
+  'No historical baseline yet — asset_cluster.updated_at is rewritten by every ' +
+  'clustering pass, so there is no month-ago state to compare against.';
+
 export interface DockFilter {
   tiers: Set<string>;
+  sources: Set<string>;
   minDevices: number;
 }
 
@@ -43,57 +60,100 @@ export interface DockCallbacks {
   onFilterChange: (filter: DockFilter) => void;
 }
 
+/**
+ * A value the data cannot supply. An em-dash plus the reason on hover — never a
+ * plausible-looking number.
+ */
+function provisional(reason: string): HTMLElement {
+  return el('span', { class: 'kpi-delta is-provisional', text: '—', title: reason });
+}
+
 export class Dock {
   private readonly root: HTMLElement;
   private readonly scroll: HTMLElement;
   private readonly collapsed: HTMLButtonElement;
+  private readonly heading: HTMLElement;
   private readonly kpiGrid: HTMLElement;
   private readonly tierRow: HTMLElement;
+  private readonly sourceRow: HTMLElement;
+  private readonly sourceGroup: HTMLElement;
   private readonly deviceRow: HTMLElement;
   private readonly readout: HTMLElement;
   private readonly note: HTMLElement;
-  private readonly badge: HTMLElement;
 
   private readonly filter: DockFilter = {
     tiers: new Set(ALL_TIER_LABELS),
+    sources: new Set(),
     minDevices: 1,
   };
   private stats: ClusterStats | null = null;
-  private isOpen = true;
+  /** Every source seen in the viewport, so "all selected" can be recognised. */
+  private knownSources: string[] = [];
+  private zoomHint = '';
 
   constructor(
     container: HTMLElement,
+    opts: { scope: string },
     private readonly callbacks: DockCallbacks,
   ) {
+    this.heading = el('h2', { class: 'dock-title', text: opts.scope });
     this.kpiGrid = el('div', { class: 'kpi-grid' });
     this.tierRow = el('div', { class: 'chip-row' });
+    this.sourceRow = el('div', { class: 'chip-row' });
     this.deviceRow = el('div', { class: 'chip-row' });
     this.note = el('p', { class: 'provenance-note', hidden: 'hidden' });
-    this.badge = el('span', { class: 'badge', text: '—' });
+
     this.readout = el('div', { class: 'dock-readout' }, [
       el('span', { text: 'Hover a marker for its reading · click to open the record' }),
     ]);
 
+    // Icon-only, so the label describes the action rather than the state.
     const collapse = el('button', {
-      class: 'link-button',
+      class: 'icon-button dock-collapse',
       type: 'button',
-      text: 'Hide',
+      text: '‹',
+      'aria-label': 'Collapse filters',
+      title: 'Collapse filters',
       'aria-expanded': 'true',
     });
     collapse.addEventListener('click', () => this.setOpen(false));
 
+    // There is no street column in the schema, so this cannot work. Rendered
+    // rather than dropped because the mockup's layout allows for it, and disabled
+    // with the reason so nobody files it as a bug.
+    const streetSearch = el('input', {
+      class: 'input',
+      type: 'search',
+      disabled: true,
+      placeholder: 'Street search needs a street column',
+      'aria-label': 'Find a street (unavailable)',
+      title: 'No street data: clusters carry coordinates only, not a street name.',
+    });
+
+    this.sourceGroup = el('div', { class: 'dock-group' }, [
+      el('h3', { class: 'dock-group-title', text: 'Detection source' }),
+      this.sourceRow,
+    ]);
+
     const card = el('div', { class: 'dock-card' }, [
       el('div', { class: 'dock-card-header' }, [
-        el('h2', { class: 'dock-title', text: 'In view' }),
-        this.badge,
+        el('div', { class: 'dock-heading-block' }, [
+          el('span', { class: 'dock-eyebrow', text: 'Network health' }),
+          this.heading,
+        ]),
         collapse,
       ]),
       this.kpiGrid,
       el('div', { class: 'dock-divider' }),
       el('div', { class: 'dock-group' }, [
+        el('h3', { class: 'dock-group-title', text: 'Find a street' }),
+        streetSearch,
+      ]),
+      el('div', { class: 'dock-group' }, [
         el('h3', { class: 'dock-group-title', text: 'Severity tier' }),
         this.tierRow,
       ]),
+      this.sourceGroup,
       el('div', { class: 'dock-group' }, [
         el('h3', { class: 'dock-group-title', text: 'Corroboration' }),
         this.deviceRow,
@@ -108,7 +168,10 @@ export class Dock {
       hidden: 'hidden',
       'aria-expanded': 'false',
     }) as HTMLButtonElement;
-    this.collapsed.append(el('span', { text: 'Filters & totals' }));
+    this.collapsed.append(
+      el('span', { class: 'dock-collapsed-caret', text: '›', 'aria-hidden': 'true' }),
+      el('span', { text: 'Network health & filters' }),
+    );
     this.collapsed.addEventListener('click', () => this.setOpen(true));
 
     // The readout is the dock's last row and stays visible when collapsed — an
@@ -120,12 +183,12 @@ export class Dock {
     ]);
     container.append(this.root);
 
+    this.renderNote();
     this.renderChips();
     this.renderKpis();
   }
 
   private setOpen(open: boolean): void {
-    this.isOpen = open;
     this.scroll.hidden = !open;
     this.collapsed.hidden = open;
   }
@@ -133,27 +196,36 @@ export class Dock {
   /** Fold in a fresh stats payload. */
   update(stats: ClusterStats): void {
     this.stats = stats;
+    // Coalesced rather than trusted: a server that predates source_counts would
+    // otherwise throw here and take every count on the card down with it, which
+    // is a worse failure than one missing filter row.
+    const sources = Object.keys(stats.source_counts ?? {}).sort();
+    // Default to every source selected. Only newly-appearing sources are added, so
+    // panning does not silently re-enable one the operator switched off.
+    for (const source of sources) {
+      if (!this.knownSources.includes(source)) this.filter.sources.add(source);
+    }
+    this.knownSources = sources;
     this.renderKpis();
     this.renderChips();
-    this.renderBadge();
   }
 
   /** Called when the stats request fails — say so rather than showing stale numbers. */
   setUnavailable(): void {
     this.stats = null;
     this.renderKpis();
-    this.renderBadge();
+    this.renderChips();
   }
 
   /**
-   * Below the aggregate zoom the tiles carry no severity or device count, so the
-   * chips genuinely cannot act. Say that rather than letting them look broken.
+   * Below the aggregate zoom the tiles carry no severity, source or device count,
+   * so the chips genuinely cannot act. Say that rather than letting them look broken.
    */
   setFiltersApply(apply: boolean): void {
-    this.note.hidden = apply;
-    this.note.textContent = apply
+    this.zoomHint = apply
       ? ''
-      : 'Zoom in past level 13 to filter — grouped markers carry no severity or device count.';
+      : 'Filters apply at street zoom — grouped markers carry no severity or device count.';
+    this.renderNote();
     for (const chip of this.root.querySelectorAll<HTMLButtonElement>('.chip')) {
       chip.disabled = !apply;
     }
@@ -175,20 +247,8 @@ export class Dock {
     ].join(' · ');
   }
 
-  private renderBadge(): void {
-    if (!this.stats) {
-      this.badge.textContent = '—';
-      return;
-    }
-    const total = this.stats.open;
-    const shown = this.shownCount();
-    // Honest when filtered: "66 of 95" makes clear the map is not the whole story.
-    this.badge.textContent =
-      shown === total ? `${total} open defects` : `${shown} of ${total} open defects`;
-  }
-
   /** Open clusters passing the tier filter, from SQL counts rather than the map. */
-  private shownCount(): number {
+  shownCount(): number {
     if (!this.stats) return 0;
     let total = 0;
     for (const [i, tier] of SEVERITY_TIERS.entries()) {
@@ -198,22 +258,34 @@ export class Dock {
     return total;
   }
 
+  private renderNote(): void {
+    const lines = [PROVENANCE_NOTE, this.zoomHint].filter((line) => line !== '');
+    this.note.hidden = lines.length === 0;
+    this.note.replaceChildren(...lines.map((line) => el('span', { text: line })));
+  }
+
   private renderKpis(): void {
     const s = this.stats;
     const severe = s ? (s.tier_counts[SEVERITY_TIERS.length - 1] ?? 0) : 0;
-    const kpis: Array<[string, string]> = [
-      [s ? String(s.open) : '—', 'Open defects in view'],
-      // Percentages of a tiny denominator mislead, so below 10 open clusters the
-      // share is withheld rather than rounded into confidence.
-      [s && s.open >= 10 ? `${Math.round((severe / s.open) * 100)}%` : '—', 'Rated severe'],
-      [s ? formatNumber(s.mean_confidence, 2) : '—', 'Mean confidence'],
-      [s ? String(s.repaired_last_30d) : '—', 'Repaired this month'],
+    const kpis: Array<{ value: string; label: string }> = [
+      { value: s ? String(s.open) : '—', label: 'Open defects in view' },
+      {
+        // Percentages of a tiny denominator mislead, so below 10 open clusters the
+        // share is withheld rather than rounded into false confidence.
+        value: s && s.open >= 10 ? `${Math.round((severe / s.open) * 100)}%` : '—',
+        label: 'Rated severe',
+      },
+      { value: s ? formatNumber(s.mean_confidence, 2) : '—', label: 'Mean confidence' },
+      { value: s ? String(s.repaired_last_30d) : '—', label: 'Repaired this month' },
     ];
     this.kpiGrid.replaceChildren(
-      ...kpis.map(([value, label]) =>
+      ...kpis.map((kpi) =>
         el('div', { class: 'kpi' }, [
-          el('span', { class: 'kpi-value', text: value }),
-          el('span', { class: 'kpi-label', text: label }),
+          el('span', { class: 'kpi-value', text: kpi.value }),
+          el('span', { class: 'kpi-label', text: kpi.label }),
+          // The mockup's delta line. Kept as a slot so the card holds its designed
+          // three-line shape, but never filled with an invented figure.
+          provisional(NO_BASELINE),
         ]),
       ),
     );
@@ -231,11 +303,29 @@ export class Dock {
           // Toggling to empty would blank the map with no way back except
           // re-selecting, so the last active tier stays on.
           if (this.filter.tiers.has(label) && this.filter.tiers.size === 1) return;
-          if (this.filter.tiers.has(label)) this.filter.tiers.delete(label);
-          else this.filter.tiers.add(label);
+          this.toggle(this.filter.tiers, label);
           this.emit();
         });
       }),
+    );
+
+    // Hidden entirely when the viewport has no clusters — an empty filter row is
+    // worse than no row.
+    this.sourceGroup.hidden = this.knownSources.length === 0;
+    this.sourceRow.replaceChildren(
+      ...this.knownSources.map((source) =>
+        this.chip(
+          source,
+          this.filter.sources.has(source),
+          this.stats?.source_counts?.[source] ?? null,
+          () => {
+            if (this.filter.sources.has(source) && this.filter.sources.size === 1) return;
+            this.toggle(this.filter.sources, source);
+            this.emit();
+          },
+          true,
+        ),
+      ),
     );
 
     this.deviceRow.replaceChildren(
@@ -254,6 +344,11 @@ export class Dock {
     );
   }
 
+  private toggle(set: Set<string>, key: string): void {
+    if (set.has(key)) set.delete(key);
+    else set.add(key);
+  }
+
   private chip(
     label: string,
     active: boolean,
@@ -266,26 +361,27 @@ export class Dock {
       type: 'button',
       'aria-pressed': active ? 'true' : 'false',
     });
-    chip.append(el('span', { text: count === null ? label : `${label} ${count}` }));
+    // The mockup separates label from count with a middot, not a space.
+    chip.append(el('span', { text: count === null ? label : `${label} · ${count}` }));
     chip.addEventListener('click', onClick);
     return chip;
   }
 
   private emit(): void {
     this.renderChips();
-    this.renderBadge();
     this.callbacks.onFilterChange({
       tiers: new Set(this.filter.tiers),
+      sources: new Set(this.filter.sources),
       minDevices: this.filter.minDevices,
     });
   }
 
-  destroy(): void {
-    this.root.remove();
+  /** True when every known source is selected, i.e. the source filter is inert. */
+  allSourcesSelected(): boolean {
+    return this.knownSources.every((s) => this.filter.sources.has(s));
   }
 
-  /** Exposed for the shell's initial paint. */
-  get open(): boolean {
-    return this.isOpen;
+  destroy(): void {
+    this.root.remove();
   }
 }

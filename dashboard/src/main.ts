@@ -16,6 +16,7 @@ import { DetailPanel } from './panel/panel.ts';
 import {
   buildShell,
   installLegendResponsiveness,
+  setOpenCount,
   readUrlState,
   refreshLegend,
   setLegendCounts,
@@ -146,6 +147,7 @@ function renderApp(): void {
   panel = new DetailPanel(panelContainer, {
     onClose: () => {
       selected = null;
+      map?.setSelected(null);
       sync();
     },
     onRepairChanged: (clusterId, repaired) => {
@@ -158,11 +160,22 @@ function renderApp(): void {
     canRepair: () => session.role === 'staff' || session.role === 'admin',
   });
 
-  dock = new Dock(mapContainer, {
-    onFilterChange: (filter) => {
-      map?.setClusterFilter(filter.tiers, filter.minDevices);
+  dock = new Dock(
+    mapContainer,
+    // The mockup's heading is the municipality's display name. The token and the
+    // login response carry only org_id, so this shows that until org.name is
+    // threaded through /auth/login — real data either way, just terser.
+    { scope: session.orgId },
+    {
+      onFilterChange: (filter) => {
+        map?.setClusterFilter(filter.tiers, filter.minDevices, {
+          selected: filter.sources,
+          all: dock!.allSourcesSelected(),
+        });
+        setOpenCount(dock!.shownCount(), lastOpenTotal);
+      },
     },
-  });
+  );
 
   map = new PotholeMap({
     container: mapContainer,
@@ -170,6 +183,7 @@ function renderApp(): void {
     assetType,
     onSelect: (clusterId) => {
       selected = clusterId;
+      map?.setSelected(clusterId);
       sync();
       void panel?.open(clusterId);
     },
@@ -190,6 +204,7 @@ function renderApp(): void {
   // uses for cluster detail.
   let statsTimer: ReturnType<typeof setTimeout> | null = null;
   let statsRequest: AbortController | null = null;
+  let lastOpenTotal = 0;
 
   function scheduleStats(): void {
     if (statsTimer !== null) clearTimeout(statsTimer);
@@ -204,12 +219,15 @@ function renderApp(): void {
     try {
       const stats = await getStats(map.bounds(), assetType, controller.signal);
       dock.update(stats);
+      lastOpenTotal = stats.open;
       setLegendCounts(stats.tier_counts, stats.unrated, stats.repaired);
+      setOpenCount(dock.shownCount(), stats.open);
     } catch (err) {
       if (controller.signal.aborted) return;
       // A failed count must not leave a stale one on screen looking current.
       dock.setUnavailable();
       setLegendCounts(null, null, null);
+      setOpenCount(null, null);
       // eslint-disable-next-line no-console
       console.warn('[stats]', err);
     }
@@ -233,7 +251,10 @@ function renderApp(): void {
 
   void fetchStats();
 
-  if (selected) void panel.open(selected);
+  if (selected) {
+    map.setSelected(selected);
+    void panel.open(selected);
+  }
   sync();
 }
 

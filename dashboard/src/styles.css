@@ -716,34 +716,59 @@ button:disabled {
   gap: var(--space-2);
 }
 
-/* ── Basemap palette (Phase 2.5b) ─────────────────────────────────────────────
+/* ── Basemap palette (Phase 2.5c) ─────────────────────────────────────────────
  * The Protomaps flavor in src/map/basemap.ts reads these through cssVar(), so
  * the map is themed by the same mechanism as the chrome.
  *
- * They exist as their own names rather than the flavor reaching for UI tokens
- * directly because two of them have no UI equivalent that flips correctly:
- * --ramp-sage-* and a water blue are defined once and are NOT redefined for dark
- * mode, so using them straight painted parks and lakes bright on a dark ground. */
+ * Two rules this block exists to enforce, both learned by getting them wrong:
+ *
+ * 1. **The map is not the chrome.** The first version used --color-canvas (the
+ *    cream #f5ead8) for the land and --color-surface for the roads. Those are
+ *    almost the same value, so the road network dissolved into the ground and the
+ *    whole pane read as one flat wash continuous with the UI. The source design
+ *    keeps cream for the app background and near-white OSM tones for the map, so
+ *    the map reads as a map inside a cream frame. Land is therefore a step darker
+ *    than the roads that cut through it, and both are separate from the canvas.
+ *
+ * 2. **Values are written out per theme rather than leaning on --ramp-neutral-*.**
+ *    That ramp inverts for dark mode, which is right for text and chrome but wrong
+ *    here: roads must stay LIGHTER than the land in both themes, and an inverted
+ *    ramp flips that relationship. The relative ordering matters more than the
+ *    absolute values, so it is stated explicitly twice.
+ *
+ * The target is what stock OSM becomes under the mockup's
+ * `saturate(.38) contrast(.88) brightness(1.08)` — drained, but with OSM's
+ * hierarchy intact: blue-grey water, pale green parks, and warm tan major roads
+ * standing above white minor ones. */
 
 :root {
-  --map-land: var(--color-canvas);
-  --map-water: #d7e2e6;
-  --map-green: var(--ramp-sage-200);
-  --map-green-deep: var(--ramp-sage-300);
-  --map-building: var(--ramp-neutral-200);
-  --map-institution: var(--ramp-neutral-100);
-  --map-road: var(--color-surface);
-  --map-road-casing: var(--ramp-neutral-300);
-  --map-road-casing-strong: var(--ramp-neutral-400);
+  --map-backdrop: #dcd3c4;        /* outside the archive's bbox */
+  --map-land: #eee7db;
+  --map-road: #fdfbf7;            /* lighter than the land, deliberately */
+  --map-road-major: #fff1e4;      /* OSM's yellow hierarchy, in the warm family */
+  --map-road-highway: #ffe3cd;
+  --map-road-casing: #d8cfc0;
+  --map-road-casing-strong: #c0b6a5;
+  --map-building: #ded5c6;
+  --map-institution: #e7e0d2;
+  --map-water: #c6d6dc;
+  --map-green: #dfe9d5;
+  --map-green-deep: #cddcc0;
 }
 
-/* Only the two that the ramps do not flip need restating; --ramp-neutral-* is
- * already inverted by the dark block in tokens.css, so the roads and buildings
- * follow on their own. */
 [data-theme='dark'] {
-  --map-water: #1f2c33;
-  --map-green: #2c352a;
-  --map-green-deep: #333d30;
+  --map-backdrop: #2a2721;
+  --map-land: #35312a;
+  --map-road: #464137;            /* still lighter than the land */
+  --map-road-major: #524738;
+  --map-road-highway: #5e4f3a;
+  --map-road-casing: #2c2822;     /* darker, so roads read as raised */
+  --map-road-casing-strong: #6a6152;
+  --map-building: #3d382f;
+  --map-institution: #3a352d;
+  --map-water: #22323a;
+  --map-green: #2f3a2c;
+  --map-green-deep: #384432;
 }
 
 /* [hidden] sets display:none in the UA stylesheet, which any class rule with a
@@ -754,4 +779,148 @@ button:disabled {
 .dock-readout[hidden],
 .provenance-note[hidden] {
   display: none;
+}
+
+/* ── Dock and top-bar detail (Phase 2.5c) ─────────────────────────────────────
+ * Matching the source mockup. Values translated through the token map recorded in
+ * the Phase 2.5c plan: the mockup's --color-accent is --color-primary here,
+ * --color-accent-2-N is --ramp-sage-N, --color-neutral-N is --ramp-neutral-N. */
+
+/* The mockup's dock header is an eyebrow above a display-font scope heading, not
+ * a bold label. Mockup lines 113-114. */
+.dock-eyebrow {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+}
+
+.dock-heading-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.dock-title {
+  margin: 2px 0 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 21px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+/* A value the data cannot supply. Muted and italic so it does not read as a
+ * measurement, and it carries the reason in a title attribute. */
+.kpi-delta.is-provisional {
+  color: var(--color-text-subtle);
+  font-style: italic;
+  cursor: help;
+}
+
+.dock-collapse,
+.dock-collapsed-caret {
+  color: var(--color-primary);
+}
+
+/* Two lines can stack here — a fixture note and a zoom hint are separate facts. */
+.provenance-note {
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Disabled because the schema has no street column; still shown, per the design. */
+.dock-group .input:disabled {
+  background: var(--color-surface-sunken);
+  color: var(--color-text-subtle);
+  cursor: not-allowed;
+}
+
+/* The mockup's `.tag` component. Sage variant carries the "N open defects shown"
+ * count in the top bar and the "Open" status in the panel. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tag-accent-2 {
+  background: var(--ramp-sage-100);
+  color: var(--ramp-sage-800);
+}
+
+.open-count {
+  flex: 0 0 auto;
+}
+
+/* organic-shell.css sets .provenance-note's colour to --ramp-accent-800 (#643312),
+ * which is correct on the light theme's near-white --color-primary-subtle. In dark
+ * mode that background becomes a translucent orange over the dark canvas while the
+ * text stays dark brown — dark on dark, unreadable. The accent ramp is not inverted
+ * by the dark block, so this has to be stated.
+ *
+ * Attribute + class beats the override layer's bare class, so load order does not
+ * matter here and organic-shell.css keeps ownership of the light theme. */
+[data-theme='dark'] .provenance-note {
+  color: var(--ramp-accent-200);
+}
+
+/* ── Panel detail (Phase 2.5c) ────────────────────────────────────────────────
+ * The mockup's section headings are display-font headings (<h5>), NOT the
+ * uppercase letterspaced terracotta eyebrow that organic-shell.css gives
+ * .section-title. That eyebrow is right for the legend's "Severity" and wrong
+ * here, so the panel gets its own class rather than fighting the override layer. */
+
+.panel-section-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--color-text);
+}
+
+.panel-heading-block {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* The record's identity stays visible but recedes; the heading below it is what
+ * an operator reads first. */
+.panel-cluster-id {
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+}
+
+.panel-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 21px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A bordered circle, per the mockup's btn-icon btn-secondary. */
+.panel-close {
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+}
+
+.action-footnote {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+  text-align: center;
 }

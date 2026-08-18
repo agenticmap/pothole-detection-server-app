@@ -137,9 +137,9 @@
   --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
 
   /* ── Layout ──────────────────────────────────────────────────────────── */
-  --rail-width: 76px;
-  --topbar-height: 64px;
-  --panel-width: 420px;
+  --rail-width: 88px;
+  --topbar-height: 66px;
+  --panel-width: 428px;
   /* The floating dock of KPIs, filters and the hover readout. */
   --dock-width: 322px;
 

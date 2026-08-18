@@ -16,6 +16,7 @@ SQL has none of those problems, works at every zoom, and can reach `repair_log`
 for a real "repaired this month" figure that no tile carries.
 """
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -58,7 +59,7 @@ WITH bounds AS (
     ) AS env
 ),
 visible AS (
-    SELECT c.cluster_id, c.severity, c.confidence, c.repaired_at
+    SELECT c.cluster_id, c.severity, c.confidence, c.repaired_at, c.source
     FROM asset_cluster c, bounds b
     WHERE c.asset_type = $5
       AND ST_Transform(c.centroid::geometry, 3857) && b.env
@@ -94,7 +95,20 @@ SELECT
                   AND width_bucket(v.severity, $7::double precision[]) = g.tier_index
             GROUP BY g.tier_index
         ) buckets
-    ) AS tier_counts
+    ) AS tier_counts,
+    -- Detection-source mix, for the dock's source chips. Sources absent from the
+    -- viewport are absent from the object rather than reported as zero: "no
+    -- camera-reviewed clusters here" and "camera review contributed 0" are
+    -- different claims, and only the first one is true.
+    (
+        SELECT coalesce(jsonb_object_agg(src, n), '{}'::jsonb)
+        FROM (
+            SELECT coalesce(v.source, 'unknown') AS src, count(*) AS n
+            FROM visible v
+            WHERE v.repaired_at IS NULL
+            GROUP BY 1
+        ) s
+    ) AS source_counts
 FROM visible
 """
 
@@ -123,6 +137,7 @@ async def get_cluster_stats(pool: asyncpg.Pool, f: StatsFilter) -> dict:
             "mean_confidence": None,
             "repaired_last_30d": 0,
             "tier_counts": counts,
+            "source_counts": {},
             "generated_at": datetime.now(UTC),
         }
 
@@ -133,5 +148,7 @@ async def get_cluster_stats(pool: asyncpg.Pool, f: StatsFilter) -> dict:
         "mean_confidence": row["mean_confidence"],
         "repaired_last_30d": row["repaired_recently"],
         "tier_counts": list(row["tier_counts"] or []),
+        # asyncpg hands jsonb back as a string unless a codec is registered.
+        "source_counts": json.loads(row["source_counts"] or "{}"),
         "generated_at": datetime.now(UTC),
     }

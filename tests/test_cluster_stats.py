@@ -241,3 +241,42 @@ class TestAuth:
 
     async def test_viewer_is_allowed(self, client, db_pool):
         assert (await client.get(stats_url(), headers=auth("viewer"))).status_code == 200
+
+
+class TestSourceCounts:
+    async def test_counts_open_clusters_per_source(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_a")
+            await _insert_cluster(conn, "clu_b")
+            await _insert_cluster(conn, "clu_c")
+            await conn.execute(
+                "UPDATE asset_cluster SET source = 'verified' WHERE cluster_id = 'clu_c'"
+            )
+
+        body = (await client.get(stats_url(), headers=auth())).json()
+        assert body["source_counts"] == {"crowd": 2, "verified": 1}
+
+    async def test_absent_sources_are_omitted_not_zeroed(self, client, db_pool):
+        """"No camera-reviewed clusters here" and "camera review: 0" differ."""
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_a")
+
+        body = (await client.get(stats_url(), headers=auth())).json()
+        assert body["source_counts"] == {"crowd": 1}
+        assert "ml" not in body["source_counts"]
+
+    async def test_repaired_clusters_are_excluded(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_a")
+            await _insert_cluster(conn, "clu_b", repaired=True)
+
+        body = (await client.get(stats_url(), headers=auth())).json()
+        # The chips filter the open queue, so the counts beside them must agree.
+        assert body["source_counts"] == {"crowd": 1}
+
+    async def test_empty_viewport_gives_an_empty_object(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_a")
+
+        body = (await client.get(stats_url(bbox=BBOX_ELSEWHERE), headers=auth())).json()
+        assert body["source_counts"] == {}

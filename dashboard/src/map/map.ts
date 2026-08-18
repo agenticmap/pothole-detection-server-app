@@ -70,6 +70,9 @@ export class PotholeMap {
   private readonly map: MapLibreMap;
   private assetType: string;
   private tileVersion = 0;
+  /** Kept so the selection can be re-applied after setTiles or setStyle, both
+   * of which discard feature state. */
+  private selectedId: string | null = null;
 
   constructor(private readonly options: PotholeMapOptions) {
     this.assetType = options.assetType;
@@ -165,6 +168,9 @@ export class PotholeMap {
     });
     this.map.addLayer(aggregateLayer());
     this.map.addLayer(individualLayer());
+    // Feature state does not survive a source rebuild, so restore it here —
+    // this runs on first load, after setStyle, and after an asset-type change.
+    this.applySelected(this.selectedId, true);
   }
 
   currentView(): MapView {
@@ -230,11 +236,15 @@ export class PotholeMap {
    * so filtering them would empty the low zooms rather than filter them; the dock
    * says so instead.
    */
-  setClusterFilter(selectedTiers: ReadonlySet<string>, minDevices: number): void {
+  setClusterFilter(
+    selectedTiers: ReadonlySet<string>,
+    minDevices: number,
+    sources: { selected: ReadonlySet<string>; all: boolean },
+  ): void {
     if (!this.map.getLayer(LAYER_INDIVIDUAL)) return;
 
     const everyTier = selectedTiers.size === SEVERITY_TIERS.length + 1;
-    if (everyTier && minDevices <= 1) {
+    if (everyTier && minDevices <= 1 && sources.all) {
       this.map.setFilter(LAYER_INDIVIDUAL, BASE_INDIVIDUAL_FILTER);
       return;
     }
@@ -255,15 +265,42 @@ export class PotholeMap {
       clauses.push(['all', ...bounded]);
     }
 
-    const filter: FilterSpecification = [
-      'all',
+    const parts: ExpressionSpecification[] = [
       BASE_INDIVIDUAL_FILTER,
       // An empty selection must hide everything, not fall through to showing
       // everything — `['any']` with no clauses evaluates false, which is right.
       ['any', ...clauses],
       ['>=', ['coalesce', ['get', 'distinct_devices'], 0], minDevices],
     ];
-    this.map.setFilter(LAYER_INDIVIDUAL, filter);
+    // Skipped when every known source is on, so the common case adds no work.
+    if (!sources.all) {
+      parts.push(['in', ['get', 'source'], ['literal', [...sources.selected]]]);
+    }
+    this.map.setFilter(LAYER_INDIVIDUAL, ['all', ...parts] as FilterSpecification);
+  }
+
+  /**
+   * Emphasise the open cluster: larger, with a dark ring (see layers.ts).
+   *
+   * Feature state rather than a separate highlight layer — one source of geometry,
+   * and it costs no extra tile request. It is remembered because setTiles and
+   * setStyle both drop feature state, so the selection would silently lose its
+   * emphasis after a theme flip or an asset-type change.
+   */
+  setSelected(clusterId: string | null): void {
+    if (this.selectedId === clusterId) return;
+    this.applySelected(this.selectedId, false);
+    this.selectedId = clusterId;
+    this.applySelected(clusterId, true);
+  }
+
+  private applySelected(clusterId: string | null, selected: boolean): void {
+    if (!clusterId) return;
+    if (!this.map.getSource(SOURCE_ID)) return;
+    this.map.setFeatureState(
+      { source: SOURCE_ID, sourceLayer: SOURCE_LAYER, id: clusterId },
+      { selected },
+    );
   }
 
   /** MapLibre does not watch its container; the shell's ResizeObserver calls this. */

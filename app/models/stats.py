@@ -26,4 +26,11 @@ class ClusterStatsResponse(BaseModel):
     tier_counts: list[int] = Field(
         description="Open cluster counts per severity tier, in the order the tiers were given."
     )
+    source_counts: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Open cluster counts per detection source. A source with no clusters in the "
+            "viewport is omitted rather than reported as zero."
+        ),
+    )
     generated_at: datetime

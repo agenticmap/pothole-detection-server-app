@@ -86,6 +86,26 @@ export function writeUrlState(state: UrlState): void {
   if (next !== location.hash) history.replaceState(null, '', next);
 }
 
+/** The top bar's open-defect tag. Module scope so main.ts can refresh it. */
+let openCountTag: HTMLElement | null = null;
+
+/**
+ * Update the open-defect tag.
+ *
+ * `shown` is what survives the dock's filters, `total` is the whole viewport.
+ * When they differ the tag says so — a bare "66 open defects" while a filter is
+ * quietly hiding 29 others would misrepresent the backlog.
+ */
+export function setOpenCount(shown: number | null, total: number | null): void {
+  if (!openCountTag) return;
+  if (shown === null || total === null) {
+    openCountTag.textContent = '—';
+    return;
+  }
+  openCountTag.textContent =
+    shown === total ? `${total} open defects` : `${shown} of ${total} open defects`;
+}
+
 export interface ShellCallbacks {
   onAssetTypeChange: (assetType: string) => void;
   onSignOut: () => void;
@@ -151,6 +171,10 @@ export function buildShell(
   }
   assetSelect.addEventListener('change', () => callbacks.onAssetTypeChange(assetSelect.value));
 
+  // Mockup line 77: a sage tag after the asset select. Fully backed by the stats
+  // endpoint, and honest when filtered — "66 of 95" rather than a bare 66.
+  openCountTag = el('span', { class: 'tag tag-accent-2 open-count', text: '—' });
+
   const signOut = el('button', { class: 'link-button', type: 'button', text: 'Sign out' });
   signOut.addEventListener('click', callbacks.onSignOut);
 
@@ -165,6 +189,7 @@ export function buildShell(
       ]),
     ]),
     assetSelect,
+    openCountTag,
     el('div', { class: 'topbar-spacer' }),
     el('div', { class: 'user-block' }, [
       el('span', { class: 'user-email', text: opts.userEmail }),

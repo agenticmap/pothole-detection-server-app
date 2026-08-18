@@ -68,19 +68,30 @@ export class DetailPanel {
     clear(this.root);
   }
 
-  private header(title: string): HTMLElement {
+  /**
+   * Panel header: a small monospace cluster id above a display-font heading.
+   *
+   * The mockup's heading is a street name ("Spadina Ave · 195"). No street column
+   * exists anywhere in the schema, so the heading carries the coordinates instead —
+   * the most locating thing the record actually contains. Inventing a street name
+   * for a screen a crew is dispatched from would be the wrong kind of fidelity.
+   */
+  private header(clusterId: string, place?: string): HTMLElement {
     const close = el('button', {
-      class: 'icon-button',
+      class: 'icon-button panel-close',
       type: 'button',
       'aria-label': 'Close detail panel',
-      text: '×',
+      text: '✕',
     });
     close.addEventListener('click', () => {
       this.close();
       this.callbacks.onClose();
     });
     return el('header', { class: 'panel-header' }, [
-      el('h2', { class: 'panel-title mono', text: title }),
+      el('div', { class: 'panel-heading-block' }, [
+        el('span', { class: 'panel-cluster-id mono', text: clusterId }),
+        place ? el('h2', { class: 'panel-title', text: place }) : null,
+      ]),
       close,
     ]);
   }
@@ -130,7 +141,7 @@ export class DetailPanel {
 
     body.append(
       el('section', { class: 'panel-section' }, [
-        field('Corroboration', plural(detail.distinct_devices, 'device')),
+        field('Corroborating devices', plural(detail.distinct_devices, 'device')),
         field('Observations', String(detail.observation_count)),
         field('Confidence', formatNumber(detail.confidence, 2)),
         field('Last seen', formatDateTime(detail.last_seen)),
@@ -143,12 +154,13 @@ export class DetailPanel {
     body.append(this.membersSection(detail));
     if (detail.repair_history.length > 0) body.append(this.historySection(detail));
 
-    this.root.append(this.header(detail.cluster_id), body, this.actionBar(detail, repaired));
+    const place = `${detail.lat.toFixed(5)}, ${detail.lon.toFixed(5)}`;
+    this.root.append(this.header(detail.cluster_id, place), body, this.actionBar(detail, repaired));
   }
 
   private framesSection(detail: ClusterDetailResponse, signal: AbortSignal): HTMLElement {
     const section = el('section', { class: 'panel-section' }, [
-      el('h3', { class: 'section-title', text: 'Camera frames' }),
+      el('h3', { class: 'panel-section-title', text: 'Camera frames' }),
     ]);
 
     if (detail.frames.length === 0) {
@@ -189,7 +201,7 @@ export class DetailPanel {
 
   private membersSection(detail: ClusterDetailResponse): HTMLElement {
     const section = el('section', { class: 'panel-section' }, [
-      el('h3', { class: 'section-title', text: `Observations (${detail.members.length})` }),
+      el('h3', { class: 'panel-section-title', text: `Observations (${detail.members.length})` }),
     ]);
 
     const list = el('ul', { class: 'member-list' });
@@ -219,7 +231,7 @@ export class DetailPanel {
 
   private historySection(detail: ClusterDetailResponse): HTMLElement {
     const section = el('section', { class: 'panel-section' }, [
-      el('h3', { class: 'section-title', text: 'Repair history' }),
+      el('h3', { class: 'panel-section-title', text: 'Repair history' }),
     ]);
     const list = el('ul', { class: 'history-list' });
     for (const entry of detail.repair_history) {
@@ -298,7 +310,17 @@ export class DetailPanel {
       }
     });
 
-    bar.append(note, button, status);
+    bar.append(
+      note,
+      button,
+      status,
+      // Mockup line 297. Worth saying out loud: hiding the button for a viewer is
+      // a convenience, and this tells an operator the real check is server-side.
+      el('p', {
+        class: 'action-footnote',
+        text: 'Repair writes are re-checked against your role on the server.',
+      }),
+    );
     return bar;
   }
 

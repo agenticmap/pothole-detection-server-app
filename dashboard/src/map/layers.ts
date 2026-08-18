@@ -24,6 +24,7 @@ import type { CircleLayerSpecification, ExpressionSpecification } from '@maplibr
 import {
   haloColor,
   repairedColor,
+  selectedRingColor,
   severityColorExpression,
   severityRadiusExpression,
 } from '../severity.ts';
@@ -50,6 +51,12 @@ const IS_REPAIRED: ExpressionSpecification = [
 ];
 
 /**
+ * True when this is the open cluster. Set from map.ts via setFeatureState, the
+ * same channel markRepairedOptimistically uses.
+ */
+const IS_SELECTED: ExpressionSpecification = ['boolean', ['feature-state', 'selected'], false];
+
+/**
  * Individual clusters. Colour AND radius both encode severity, so the encoding
  * survives colour-vision deficiency and greyscale printing.
  *
@@ -69,20 +76,17 @@ export function individualLayer(): CircleLayerSpecification {
     filter: BASE_INDIVIDUAL_FILTER,
     paint: {
       'circle-color': ['case', IS_REPAIRED, repairedColor(), severityColorExpression()],
-      'circle-radius': [
-        'interpolate',
-        ['linear'],
-        ['zoom'],
-        13,
-        ['*', 0.7, radius],
-        18,
-        radius,
-      ],
-      'circle-opacity': ['case', IS_REPAIRED, 0.45, 0.9],
+      // Radius is FIXED per tier, not interpolated by zoom. An earlier version
+      // scaled from 0.7x at z13 up to 1x at z18, which made every marker tiny at
+      // the default z14 and flattened the four tiers into near-identical dots —
+      // the tier radii are the redundant channel that carries severity when colour
+      // cannot, so shrinking them defeats the encoding.
+      'circle-radius': ['case', IS_SELECTED, ['*', 1.5, radius], radius],
+      'circle-opacity': ['case', IS_REPAIRED, 0.55, 0.95],
       // A halo keeps markers legible over both pale roads and dark parkland;
       // without it they disappear against mid-tone areas of the basemap.
-      'circle-stroke-width': 1.5,
-      'circle-stroke-color': haloColor(),
+      'circle-stroke-width': ['case', IS_SELECTED, 2.5, 1.5],
+      'circle-stroke-color': ['case', IS_SELECTED, selectedRingColor(), haloColor()],
       'circle-stroke-opacity': ['case', IS_REPAIRED, 0.5, 1],
     },
   };

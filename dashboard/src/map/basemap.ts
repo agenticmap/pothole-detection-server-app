@@ -56,65 +56,70 @@ addProtocol('pmtiles', protocol.tile);
 /**
  * The Organic flavor.
  *
- * A `Flavor` is ~75 colour fields; the named flavors supply sensible values for
- * all of them, so this overrides only what the design actually speaks to and
- * inherits the rest. Every value comes from tokens.css rather than a literal, so
- * the map and the chrome cannot drift apart — and because `cssVar` resolves
- * against the live `data-theme`, one function serves both themes.
+ * `namedFlavor('light')` is the base, and it is kept for a specific reason: it
+ * already encodes OSM's ROAD HIERARCHY — white major roads over #ebebeb minor
+ * ones, with casings a step darker. That hierarchy is what makes a street network
+ * legible, and the first version of this file destroyed it by painting every road
+ * class the same cream. Only the palette is re-pointed here; the structure is
+ * Protomaps'.
  *
- * The shape of the edit, per the design handoff: land and water lifted toward
- * the canvas, road casing pulled to a neutral mid-grey, labels held at full text
- * contrast. Warmth stays in the palette — the point is a calm ground, not a grey
- * one.
+ * What the base gets wrong for this design, and is overridden below: its water is
+ * a vivid cyan (#80deea) and its land is a cool grey (#e2dfda). Both are pulled
+ * into the warm, drained register of the source mockup.
+ *
+ * Every value comes from the --map-* block in styles.css rather than a literal,
+ * so light and dark are declared in one place and `cssVar` resolves against the
+ * live `data-theme`.
  */
 function organicFlavor(theme: Theme): Flavor {
   const base = namedFlavor(theme === 'dark' ? 'dark' : 'light');
 
   const land = cssVar('--map-land');
-  const water = cssVar('--map-water');
-  const green = cssVar('--map-green');
-  const greenDeep = cssVar('--map-green-deep');
-  const building = cssVar('--map-building');
-  const institution = cssVar('--map-institution');
   const road = cssVar('--map-road');
+  const roadMajor = cssVar('--map-road-major');
+  const roadHighway = cssVar('--map-road-highway');
   const casing = cssVar('--map-road-casing');
   const casingStrong = cssVar('--map-road-casing-strong');
-  const text = cssVar('--color-text');
-  const muted = cssVar('--color-text-muted');
-  const halo = cssVar('--color-canvas');
+  const green = cssVar('--map-green');
+  const greenDeep = cssVar('--map-green-deep');
+  const institution = cssVar('--map-institution');
 
   return {
     ...base,
-    background: land,
+    background: cssVar('--map-backdrop'),
     earth: land,
-    water,
+    water: cssVar('--map-water'),
+    buildings: cssVar('--map-building'),
+
     // Green space keeps the sage voice the design system asks for as a genuine
-    // second colour, rather than another tint of the terracotta primary.
+    // second colour. The _a / _b pairs are the low- and high-zoom variants, so
+    // _b is a step deeper to keep parks from flattening as you zoom in.
     park_a: green,
-    park_b: green,
-    wood_a: greenDeep,
+    park_b: greenDeep,
+    wood_a: green,
     wood_b: greenDeep,
     scrub_a: green,
-    scrub_b: green,
+    scrub_b: greenDeep,
     zoo: green,
-    // Institutional land is a ground, not a category to read at a glance.
+
+    // Institutional land is a ground, not a category to read at a glance — one
+    // step off the land rather than four different tints competing with markers.
     hospital: institution,
     school: institution,
     industrial: institution,
     military: institution,
     aerodrome: institution,
     pedestrian: institution,
-    buildings: building,
-    // Roads read as light channels cut through the ground, with the casing
-    // carrying the edge. This is the pairing that stops the network competing
-    // with the markers.
+
+    // Roads: lighter than the land, with majors carrying a warm tint so the
+    // arterial network still reads at a glance — OSM's yellow, drained.
     other: road,
     minor_service: road,
     minor_a: road,
     minor_b: road,
-    link: road,
-    major: road,
-    highway: road,
+    link: roadMajor,
+    major: roadMajor,
+    highway: roadHighway,
     minor_service_casing: casing,
     minor_casing: casing,
     link_casing: casing,
@@ -124,18 +129,19 @@ function organicFlavor(theme: Theme): Flavor {
     highway_casing_late: casingStrong,
     railway: casingStrong,
     boundaries: casingStrong,
+
     // Labels are the one thing NOT calmed: an operator reads street names off
     // this map to dispatch a crew.
-    roads_label_minor: muted,
-    roads_label_minor_halo: halo,
-    roads_label_major: text,
-    roads_label_major_halo: halo,
-    subplace_label: muted,
-    subplace_label_halo: halo,
-    city_label: text,
-    city_label_halo: halo,
-    state_label: muted,
-    state_label_halo: halo,
+    roads_label_minor: cssVar('--color-text-muted'),
+    roads_label_minor_halo: land,
+    roads_label_major: cssVar('--color-text'),
+    roads_label_major_halo: land,
+    subplace_label: cssVar('--color-text-muted'),
+    subplace_label_halo: land,
+    city_label: cssVar('--color-text'),
+    city_label_halo: land,
+    state_label: cssVar('--color-text-muted'),
+    state_label_halo: land,
     ocean_label: cssVar('--color-accent-2-text'),
   };
 }
