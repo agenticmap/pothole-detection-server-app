@@ -199,6 +199,75 @@ Note that **`pytest` TRUNCATEs every table**, so a test run wipes the seed *and*
 account. Re-run steps 1 and 2 afterwards.
 
 
+### Production accounts
+
+**There is no production username and password, and there must never be one written down
+here.** Two separate reasons:
+
+1. **Nothing is deployed yet.** Production hardening is Phase 4 (`docs/roadmap.md`), still
+   planned. The only deployment artefacts in the repo are the `Dockerfile` and a local
+   `docker-compose.yml`.
+2. **A shared production credential is the wrong shape anyway.** `repair_log.user_id` is an
+   audit trail — it records who marked a defect repaired, and a city may have to stand behind
+   that record. One shared login makes every entry say the same thing and the audit worthless.
+   Provision **one account per operator**.
+
+And unlike the demo login above, a production credential committed here could not be withdrawn:
+`git rm` does not remove anything from history, and this repo has a remote.
+
+#### Provisioning an operator, once there is a deployment
+
+Same script, pointed at the deployed database. The password is read from the environment or
+prompted for — never from `argv`, so it stays out of shell history and the process list.
+
+```bash
+DATABASE_URL='<deployed connection string>' \
+  python scripts/create_staff.py --org org_cambridge --name "City of Cambridge" \
+    --email jane@cambridge.gov --role staff
+# Password: ‹prompted; not echoed›
+```
+
+Rules that follow from the above:
+
+- Let it **prompt**. Use `POTHOLE_STAFF_PASSWORD` only in an interactive shell you control, and
+  never in a script, a CI job, or a file that gets committed.
+- The operator should choose their own password, or be sent a generated one **out of band**
+  (not in the same channel as the URL). There is no password-reset flow to recover from a bad
+  hand-off — see the gaps below.
+- `viewer` for read-only staff; `staff` or `admin` only for people who should be able to mark
+  repairs. `admin` is not required for day-to-day operation.
+- The connection string is itself a secret. It belongs in the host's secret store, not in a
+  committed `.env`. `.env.example` deliberately ships every secret value empty.
+
+#### Pre-flight, or auth breaks in ways that look like client bugs
+
+- **`AUTH_JWT_PRIVATE_KEY_PEM` must be set.** Left empty the server mints an ephemeral keypair
+  per process, and `Dockerfile:30` runs `uvicorn --workers 2` — so each worker signs with a
+  different key and tokens minted by one fail on the other. That surfaces as *intermittent*
+  401s. Outside `ENV=development` it fails closed (`RuntimeError` in `app/auth/keys.py:64`),
+  which is the correct behaviour; do not work around it by setting `ENV=development` in a
+  deployment. Generation command is in `.env.example`.
+- **`ENV=production` means migrations do not run on boot** (`app/main.py` only migrates in
+  development). Apply them as a deliberate deployment step.
+- **`DATABASE_USE_POOLER=true`** when going through Supabase's transaction pooler, or asyncpg's
+  statement cache produces "prepared statement does not exist" errors under load.
+
+#### Lifecycle — what actually exists today
+
+| Operation | How | Status |
+|---|---|---|
+| Disable an account | `UPDATE staff_user SET disabled = TRUE WHERE lower(email) = lower('…')` | Works — checked on every login (`app/auth/service.py`) |
+| Change a role | `UPDATE org_member SET role = '…'` | Works for writes immediately (they re-read `org_member`); reads use the role baked into the token until it expires (≤ 30 min) |
+| Rotate a password | SQL `UPDATE staff_user SET password_hash = …` with a fresh bcrypt hash | **No endpoint or script.** Gap |
+| Revoke a session | Delete the user's `refresh_token` rows | Access token still works until it expires (≤ 30 min) |
+
+**Gaps to close before a real pilot**, none of which are hidden by the table above: no
+password-change or password-reset flow, no `POST /auth/logout`, no MFA, and **no throttling on
+the login endpoint** — the rate limiter is device-keyed and ingest-only, so `/auth/login` is
+unprotected against credential stuffing. Also note the authorization gap already recorded in
+`app/routes/clusters.py`: `asset_cluster` has no `org_id`, so any staff member of any org can
+repair any city's clusters.
+
 ### Things that will bite you (continued)
 
 - **MapLibre's worker is a static asset, not a bundled chunk.** MapLibre 6 computes its worker
