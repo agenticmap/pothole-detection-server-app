@@ -41,3 +41,9 @@ node_modules/
 
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Training datasets. Multi-GB archives that GitHub rejects outright (100 MB/file
+# limit) and that bloated history until they were stripped. Keep them on disk;
+# they are inputs to model training, not source. The MATLAB research code in
+# files/MatlabCode/ stays tracked.
+files/*.zip
