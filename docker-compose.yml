@@ -18,5 +18,44 @@ services:
       timeout: 5s
       retries: 5
 
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pothole-app
+    restart: unless-stopped
+    env_file:
+      # Optional so a fresh clone can `docker compose up` before anyone has
+      # copied .env.example across. The image's own defaults (app/config.py)
+      # are sufficient to boot; secrets are only needed for the staff tier.
+      - path: .env
+        required: false
+    environment:
+      # Container-to-container hostname; overrides the localhost value from .env
+      DATABASE_URL: postgresql://pothole:pothole@postgres:5432/pothole_db
+    ports:
+      # Same 8000 the README's hand-run uvicorn uses — the two are alternatives,
+      # not a sequence. Running both gives "port is already allocated".
+      - "8000:8000"
+    volumes:
+      - ./storage/frames:/opt/server/storage/frames
+      # Per-deployment basemap archive (one PMTiles file per city). Read-only and
+      # mounted rather than baked in: it is a build artefact outside git, and a
+      # different pilot city means a different archive with the same image.
+      - ./storage/basemap:/opt/server/storage/basemap:ro
+    healthcheck:
+      # No curl in python:3.12-slim, so use the interpreter that is already here.
+      # urlopen raises on a non-2xx status, so a 503 from /health fails the check.
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:

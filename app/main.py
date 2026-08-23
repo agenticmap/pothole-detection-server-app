@@ -33,10 +33,12 @@ async def lifespan(app: FastAPI):
     pool = await create_pool()
     set_pool(pool)
 
-    # Run migrations in development mode
-    if settings.env == "development":
-        logger.info("Running database migrations (development mode)...")
-        await run_migrations(pool)
+    # Migrations are tracked in schema_migrations and applied at most once, so
+    # this runs in every environment. It used to be gated on
+    # env == "development", which meant a production boot against a fresh
+    # database created no tables at all and then served 500s.
+    logger.info("Applying database migrations...")
+    await run_migrations(pool)
 
     # Start the in-process fit + fusion scheduler (gated by config).
     start_scheduler(pool)

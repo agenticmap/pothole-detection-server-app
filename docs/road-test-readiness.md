@@ -144,17 +144,20 @@ a new `LOG_LEVEL` setting (default INFO).
 - **Latency** — fusion every 5 min, clustering every 15 min, sensor fit every 60 min. Allow
   ~20 min after a sync before judging results.
 - **30-day window** — clustering only considers members from the last `cluster_window_days = 30`.
-- **`ENV` must stay `development`** — `app/main.py` only runs `run_migrations()` in development.
-  Starting with `ENV=production` against a fresh DB creates **no tables at all**.
-- **`GET /health` never returns 503.** The `except` branch returns HTTP 200 with
-  `{"status": "unhealthy"}`, so a status-code-only uptime check reports green with a dead DB.
+- ~~**`ENV` must stay `development`**~~ **Fixed.** Migrations are tracked in a
+  `schema_migrations` ledger and applied at most once, in every environment, under an advisory
+  lock. `ENV=production` against a fresh DB now builds the schema instead of creating no tables.
+- ~~**`GET /health` never returns 503.**~~ **Fixed.** The unhealthy branch now returns a real
+  503 (body shape unchanged), so uptime checks and the compose healthcheck can see a dead DB.
 - **Server-side detection is off** (`detection_enabled = False`). Fusion falls back to the device
   probability via `COALESCE(server_probability, device_probability)`, so the loop works without
   it. Not required for a first drive.
 - **Auth uses an ephemeral RS256 keypair in dev** — irrelevant to anonymous ingestion and the
   public read path.
-- **`docker-compose.yml` maps host `5433`**, not 5432, and starts **only Postgres** — the API is
-  run by hand. The compose service is named `postgres` (not `db`).
+- **`docker-compose.yml` maps host `5433`**, not 5432. The compose service is named `postgres`
+  (not `db`). It now also defines an **`app`** service that builds the dashboard and serves the
+  API on `8000` with a healthcheck — so `docker compose up` is a complete stack. Running the
+  compose app *and* a hand-run `uvicorn` at once fails on the port; they are alternatives.
 
 ## Pre-drive checklist
 
@@ -206,16 +209,19 @@ Test rows were removed afterwards so they do not pollute the sensor-model fit.
   collected drive data. It now targets `pothole_test` behind an allow-list guard. One-time
   setup: `docker compose exec postgres createdb -U pothole pothole_test`.
 - **Repair marking no longer needs raw SQL** — `POST /api/v1/clusters/{id}/repair`, audited.
-- Test count is now **206**, not the 105 quoted below.
+- Test count is now **240**, not the 105 quoted below.
 
 ## Known gaps (not blocking a drive)
 
 - **The in-memory rate limiter is per-worker.** The Dockerfile runs `--workers 2`, so the
   effective limit doubles and is applied inconsistently. Fine for one device; wrong for a fleet.
-- **`run_fit_job` has no advisory lock** (unlike fusion `0x504F54` and cluster `0x504F55`), so two
-  workers can race on the `idx_sensor_model_active` partial unique index.
+- ~~**`run_fit_job` has no advisory lock**~~ **Fixed** — it now takes `0x504F57`, alongside
+  fusion `0x504F54`, cluster `0x504F55` and detection `0x504F56`. Migrations take `0x504F53`.
 - **No frame retention/GC.** Roadmap §2.8 describes a 90-day GC and a 500 MB/device budget;
   neither is implemented. A long collection campaign will grow `storage/` without bound.
-- **No `VOLUME` in the Dockerfile** and no app service in compose — a container restart would
-  destroy collected JPEGs if the API is ever containerised.
+- ~~**No `VOLUME` in the Dockerfile** and no app service in compose~~ **Fixed.** The Dockerfile
+  declares `VOLUME /opt/server/storage/frames`, and compose defines the `app` service with the
+  frames bind mount plus a read-only `storage/basemap` mount. Before this, the containerised app
+  served **no dashboard and no basemap** — both mounts are `is_dir()`-guarded, so they failed
+  silently.
 - **No TLS anywhere.** Plain HTTP only; fine behind a tunnel, not for a real deployment.

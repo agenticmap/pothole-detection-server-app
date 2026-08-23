@@ -1,3 +1,7 @@
+---
+updated: 2026-08-16
+---
+
 # Pothole Detection — Ingestion Server
 
 **Phase 2.0 Backend** — Receives sensor events and camera frames from mobile devices, validates payloads, and stores them in PostgreSQL + PostGIS.
@@ -87,8 +91,8 @@ curl http://localhost:8000/health
 | `SUPABASE_STORAGE_BUCKET` | `frames` | Storage bucket name |
 | `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Allowed CORS origins |
 | `ENV` | `development` | Environment: `development` / `staging` / `production` |
-| `RATE_LIMIT_EVENTS_PER_HOUR` | `100` | Max events per device per hour |
-| `RATE_LIMIT_FRAMES_PER_HOUR` | `100` | Max frames per device per hour |
+| `RATE_LIMIT_EVENTS_PER_HOUR` | `5000` | Max events per device per hour |
+| `RATE_LIMIT_FRAMES_PER_HOUR` | `5000` | Max frames per device per hour |
 | `MAX_BATCH_SIZE` | `100` | Max events in a single POST batch |
 | `MAX_FRAME_SIZE_BYTES` | `10485760` | Max JPEG size (10 MB) |
 
@@ -152,9 +156,13 @@ Batch sensor event ingestion.
 
 **Field Validation Rules:**
 
+> **`app/models/__init__.py` is the source of truth.** This table is a convenience copy and has
+> drifted before — it previously understated the accel/magnitude ceilings by 4×. Check the model
+> (or `/openapi.json` on a running instance) before treating any number here as the contract.
+
 | Field | Type | Required | Constraints |
 |---|---|---|---|
-| `client_id` | string | yes | 1–64 chars, UUID format |
+| `client_id` | string | yes | 1–64 chars (format not enforced) |
 | `schema_version` | int | no | Default 1, range [1, 100] |
 | `ts` | string | yes | ISO-8601 UTC with timezone |
 | `lat` | float | yes | [-90, 90] |
@@ -162,16 +170,21 @@ Batch sensor event ingestion.
 | `speed_mps` | float | yes | [0, 200] |
 | `bearing_deg` | float | yes | [0, 360] |
 | `speed_accuracy_mps` | float | no | [0, 200] |
-| `accel_max_g` | float | yes | [-50, 50] |
-| `accel_std` | float | yes | [0, 100] |
-| `magnitude` | float | yes | [0, 500] |
-| `gbar_in_max` | float | no | [0, 500] |
+| `accuracy_m` | float | no | [0, 10 000] |
+| `accel_max_g` | float | yes | [-200, 200] |
+| `accel_std` | float | yes | [0, 200] |
+| `magnitude` | float | yes | [0, 2000] |
+| `gbar_in_max` | float | no | [0, 2000] |
 | `time_in_max` | float | no | ≥ 0 |
 | `time_in_min` | float | no | ≥ 0 |
 | `confidence` | float | yes | [0, 1] |
 | `raw_window_b64` | string | no | Max 50,000 chars |
 | `visual_confirmed` | bool | no | — |
 | `frame_client_id` | string | no | Max 64 chars |
+
+Unknown fields are **ignored**, not rejected (Pydantic v2 default `extra="ignore"`), so the client
+may add fields ahead of the server. A single out-of-range field **422s the entire batch** — the
+per-row tolerance described elsewhere applies to DB errors, not validation.
 
 **Response 200:**
 ```json
@@ -195,7 +208,7 @@ Batch sensor event ingestion.
 |---|---|
 | 400 | Missing `X-Device-Id` or `Accept-Version` header |
 | 422 | Payload validation failure (invalid fields, empty batch, etc.) |
-| 429 | Rate limit exceeded (> 100 events/hour per device) |
+| 429 | Rate limit exceeded (> 5000 events/hour per device) |
 | 500 | Internal server error |
 
 ---
@@ -263,7 +276,7 @@ Single camera frame upload (multipart).
 |---|---|
 | 400 | Invalid metadata JSON, invalid JPEG, or empty file |
 | 413 | Frame exceeds MAX_FRAME_SIZE_BYTES |
-| 429 | Rate limit exceeded (> 100 frames/hour per device) |
+| 429 | Rate limit exceeded (> 5000 frames/hour per device) |
 
 ---
 
@@ -359,8 +372,8 @@ server/
 │   ├── test_events.py        # Event endpoint tests
 │   ├── test_frames.py        # Frame endpoint tests
 │   └── test_health.py        # Health endpoint tests
-├── docker-compose.yml        # Local PostgreSQL + PostGIS
-├── Dockerfile                # Production container
+├── docker-compose.yml        # PostgreSQL + PostGIS, and the API service
+├── Dockerfile                # Production container (node dashboard build + API)
 ├── .env.example              # Environment template
 ├── .gitignore
 ├── pyproject.toml            # Project metadata + tool config

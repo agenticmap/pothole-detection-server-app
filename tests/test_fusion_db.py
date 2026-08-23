@@ -160,3 +160,37 @@ async def test_fusion_prefers_server_probability_over_device(db_pool):
 
     assert fa is not None and fb is not None
     assert fa > fb  # identical sensor signal; A's stronger visual term wins
+
+
+async def test_fit_job_is_single_flight_under_advisory_lock(db_pool):
+    """Regression: run_fit_job had no advisory lock while every other job did.
+
+    The Dockerfile runs `uvicorn --workers 2`, so two schedulers can tick at the
+    same moment. Both would fit and both would call save_model, racing on the
+    idx_sensor_model_active partial unique index. Here the lock is taken out from
+    under the job to prove it declines to run rather than proceeding.
+    """
+    from app.fusion.service import _FIT_LOCK_KEY
+
+    async with db_pool.acquire() as conn:
+        await _seed_three_blobs(conn, n_per_blob=90, prefix="lock")  # 270 >= 200
+
+    # Hold the lock on a connection the job cannot use, mimicking the other worker.
+    async with db_pool.acquire() as holder:
+        held = await holder.fetchval("SELECT pg_try_advisory_lock($1)", _FIT_LOCK_KEY)
+        assert held is True
+        try:
+            assert await run_fit_job(db_pool) is None
+            assert await load_active_model(db_pool) is None
+        finally:
+            await holder.execute("SELECT pg_advisory_unlock($1)", _FIT_LOCK_KEY)
+
+    # Lock released -> the same call now does the work, so the skip above was the
+    # lock and not the gate.
+    assert await run_fit_job(db_pool) is not None
+    assert await load_active_model(db_pool) is not None
+
+    # And the lock is not leaked: a third caller can still take it.
+    async with db_pool.acquire() as conn:
+        assert await conn.fetchval("SELECT pg_try_advisory_lock($1)", _FIT_LOCK_KEY) is True
+        await conn.execute("SELECT pg_advisory_unlock($1)", _FIT_LOCK_KEY)

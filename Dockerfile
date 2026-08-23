@@ -1,6 +1,29 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Production Dockerfile — Pothole Detection Ingestion Server
+#
+# Two stages. The dashboard is built with node and its output copied into the
+# python image, because app/main.py mounts dashboard/dist only if the directory
+# exists — a python-only image boots fine and silently serves no dashboard,
+# which is how the operator console went missing from the container.
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ── Stage 1: build the operator dashboard ────────────────────────────────────
+FROM node:22-slim AS dashboard
+
+WORKDIR /build
+
+# Manifests first so `npm ci` is cached independently of the source.
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
+
+# scripts/ is needed before the build: the prebuild hook copies MapLibre's
+# worker out of node_modules into public/. Without it every vector source
+# silently fails to load, so a missing worker is a blank map, not an error.
+COPY dashboard/ ./
+RUN npm run build
+
+
+# ── Stage 2: the API server ──────────────────────────────────────────────────
 FROM python:3.12-slim AS base
 
 # Prevent Python from writing .pyc and enable unbuffered stdout/stderr
@@ -22,8 +45,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY migrations/ ./migrations/
 
+# The built dashboard. Path must match settings.dashboard_dist_path, which
+# resolves relative to the repo root (= WORKDIR here).
+COPY --from=dashboard /build/dist ./dashboard/dist
+
 # Create storage directory for local frame storage fallback
 RUN mkdir -p /opt/server/storage/frames
+
+# Declared so collected JPEGs survive a container replacement even when nobody
+# passes -v. Scoped to frames/ deliberately: storage/basemap is per-deployment
+# data supplied by a read-only mount, and declaring the parent would shadow it.
+VOLUME ["/opt/server/storage/frames"]
 
 EXPOSE 8000
 

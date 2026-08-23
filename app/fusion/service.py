@@ -36,6 +36,9 @@ logger = logging.getLogger(__name__)
 _FUSION_LOCK_KEY = 0x504F54  # 'POT'
 # Distinct key for the clustering job so it can run concurrently with fusion.
 _CLUSTER_LOCK_KEY = 0x504F55  # 'POT' + 1
+# Distinct key for the fit job. 0x504F56 belongs to the detection worker
+# (app/detection/service.py), so the fit job takes the next one.
+_FIT_LOCK_KEY = 0x504F57  # 'POT' + 3
 
 
 # ── Fit job ─────────────────────────────────────────────────────────────────
@@ -56,7 +59,26 @@ async def run_fit_job(pool: asyncpg.Pool) -> str | None:
     """Refit the sensor model when enough (new) observations have accumulated.
 
     Returns the new model_version, or None if the gate was not met / fit failed.
+
+    Single-flight via advisory lock, like the fusion and cluster jobs. Without it
+    two uvicorn workers could fit concurrently and race on the
+    idx_sensor_model_active partial unique index, since save_model flips which row
+    is active. The lock is held on its own connection for the whole job because
+    load_active_model/save_model take the pool rather than a connection.
     """
+    async with pool.acquire() as lock_conn:
+        locked = await lock_conn.fetchval("SELECT pg_try_advisory_lock($1)", _FIT_LOCK_KEY)
+        if not locked:
+            logger.info("Fit job already running; skipping this tick.")
+            return None
+        try:
+            return await _run_fit_locked(pool)
+        finally:
+            await lock_conn.execute("SELECT pg_advisory_unlock($1)", _FIT_LOCK_KEY)
+
+
+async def _run_fit_locked(pool: asyncpg.Pool) -> str | None:
+    """The fit itself. Caller holds _FIT_LOCK_KEY."""
     async with pool.acquire() as conn:
         total = await conn.fetchval(_COUNT_FITTABLE_SQL)
 
