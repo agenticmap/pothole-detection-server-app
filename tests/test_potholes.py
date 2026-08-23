@@ -158,3 +158,62 @@ async def test_single_device_clusters_visible_when_threshold_is_one(client, db_p
         assert "solo" in ids
     finally:
         settings.cluster_min_distinct_devices = original
+
+
+# ── Degenerate-geometry guards (regression) ───────────────────────────────────
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        "-180.0,-10.0,180.0,10.0",   # full 360-degree span
+        "-170.0,-10.0,170.0,10.0",   # 340 degrees
+        "-100.0,-10.0,90.0,10.0",    # 190 degrees — just over the limit
+    ],
+)
+async def test_over_wide_longitude_span_returns_400(client, bbox):
+    """Regression: a bbox wider than 180 degrees used to reach ST_MakeEnvelope.
+
+    PostGIS then raised "Antipodal (180 degrees long) edge detected!", which
+    surfaced as an unhandled asyncpg error — an HTTP 500 on a public,
+    unauthenticated endpoint. The route must reject it as a client error.
+    Compare tests/test_tiles.py::test_world_spanning_tiles_do_not_500, where the
+    tile path dodges the same failure by staying in 3857.
+    """
+    resp = await client.get(f"/api/v1/potholes?bbox={bbox}&zoom=16", headers=V)
+    assert resp.status_code == 400
+    assert "longitude span" in resp.json()["detail"]
+
+
+async def test_exactly_180_degree_span_is_allowed(client, db_pool):
+    """The boundary is deliberately inclusive — 180 was verified to work."""
+    resp = await client.get(
+        "/api/v1/potholes?bbox=-90.0,-10.0,90.0,10.0&zoom=16", headers=V
+    )
+    assert resp.status_code == 200
+
+
+async def test_postgis_error_becomes_400_not_500(client, db_pool, monkeypatch):
+    """Defence in depth: any PostgresError from the read query is a 400, not a 500.
+
+    The route guard above catches the known degenerate bboxes, so this forces the
+    service-level except branch directly. A division-by-zero is an
+    asyncpg.PostgresError subclass, which is what the handler keys on — the point
+    is that no PostGIS complaint about the caller's geometry can reach a public
+    client as a server fault.
+    """
+    from app.services import cluster_query_service
+
+    # Consumes the same eight parameters so asyncpg's arity check still passes.
+    exploding_sql = """
+        SELECT 1 / 0 AS boom
+        WHERE $1::int IS NOT NULL AND $2::int IS NOT NULL
+          AND $3::float8 IS NOT NULL AND $4::float8 IS NOT NULL
+          AND $5::float8 IS NOT NULL AND $6::float8 IS NOT NULL
+          AND ($7::timestamptz IS NULL OR TRUE)
+          AND $8::int IS NOT NULL
+    """
+    monkeypatch.setattr(cluster_query_service, "_INDIVIDUAL_SQL", exploding_sql)
+
+    resp = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16", headers=V)
+    assert resp.status_code == 400
+    assert "geographic area" in resp.json()["detail"]

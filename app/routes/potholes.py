@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["potholes"])
 
+# Widest longitude span a bbox may cover. Beyond 180 degrees a PostGIS geography envelope can have
+# antipodal corners, where the great-circle edge between them is ambiguous. Exactly 180 is still
+# accepted — it was verified to work — so this only rejects genuinely degenerate requests, and no
+# real client viewport comes close.
+MAX_BBOX_LON_SPAN_DEG = 180.0
+
 
 def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
     """Parse and validate a 'minLon,minLat,maxLon,maxLat' bbox string."""
@@ -47,6 +53,19 @@ def _parse_bbox(bbox: str) -> tuple[float, float, float, float]:
         raise HTTPException(status_code=400, detail="bbox latitudes must be in [-90, 90].")
     if min_lon >= max_lon or min_lat >= max_lat:
         raise HTTPException(status_code=400, detail="bbox min must be strictly less than max.")
+    # PostGIS rejects a geography envelope spanning >= 180 degrees of longitude with
+    # "Antipodal (180 degrees long) edge detected!" — the great-circle edge between the corners is
+    # ambiguous. That surfaced as an unhandled asyncpg error, i.e. an HTTP 500 on a public,
+    # unauthenticated endpoint. A real map viewport is never this wide, so treat it as the client
+    # error it is rather than letting it reach ST_MakeEnvelope.
+    if (max_lon - min_lon) > MAX_BBOX_LON_SPAN_DEG:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"bbox longitude span must not exceed {MAX_BBOX_LON_SPAN_DEG:g} degrees; "
+                "request a narrower viewport."
+            ),
+        )
     return min_lon, min_lat, max_lon, max_lat
 
 

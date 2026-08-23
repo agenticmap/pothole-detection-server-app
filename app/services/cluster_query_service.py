@@ -20,6 +20,7 @@ import logging
 from datetime import UTC, datetime
 
 import asyncpg
+from fastapi import HTTPException
 
 from app.config import settings
 from app.models.potholes import (
@@ -97,62 +98,80 @@ async def query_potholes(
     window_days = settings.cluster_window_days
     generated_at = datetime.now(UTC).isoformat()
 
+    individual = zoom > INDIVIDUAL_ZOOM_THRESHOLD
+
+    try:
+        async with pool.acquire() as conn:
+            if individual:
+                rows = await conn.fetch(
+                    _INDIVIDUAL_SQL,
+                    min_devices, window_days, min_lon, min_lat, max_lon, max_lat, since,
+                    MAX_ITEMS,
+                )
+            else:
+                # One tile-width in degrees at this zoom; coarser cells at lower zoom.
+                cell_deg = 360.0 / (2 ** zoom)
+                rows = await conn.fetch(
+                    _AGGREGATE_SQL,
+                    min_devices, window_days, min_lon, min_lat, max_lon, max_lat, since,
+                    cell_deg,
+                )
+    except asyncpg.exceptions.PostgresError as exc:
+        # A degenerate bbox can make ST_MakeEnvelope(...)::geography raise — e.g. "Antipodal
+        # (180 degrees long) edge detected!" on a whole-world request. The route rejects the
+        # obvious cases up front, but this endpoint is public and unauthenticated, so no geometry
+        # input may reach the client as a 500. Anything PostGIS refuses to measure is a bad
+        # request, not a server fault.
+        logger.warning(
+            "Pothole read rejected by PostGIS for bbox=%s,%s,%s,%s zoom=%s: %s",
+            min_lon, min_lat, max_lon, max_lat, zoom, exc,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="bbox could not be evaluated as a geographic area; request a narrower viewport.",
+        ) from exc
+
     items: list = []
-    async with pool.acquire() as conn:
-        if zoom > INDIVIDUAL_ZOOM_THRESHOLD:
-            rows = await conn.fetch(
-                _INDIVIDUAL_SQL,
-                min_devices, window_days, min_lon, min_lat, max_lon, max_lat, since,
-                MAX_ITEMS,
-            )
-            if len(rows) >= MAX_ITEMS:
-                logger.warning("Pothole read hit the %d-item cap; payload truncated.", MAX_ITEMS)
-            for r in rows:
-                if detail:
-                    last_seen = r["last_seen"]
-                    items.append(
-                        PotholeItem(
-                            id=r["cluster_id"],
-                            lat=r["lat"],
-                            lon=r["lon"],
-                            severity=r["severity"],
-                            confidence=r["confidence"],
-                            observation_count=r["observation_count"],
-                            distinct_devices=r["distinct_devices"],
-                            last_seen=last_seen.isoformat() if last_seen else None,
-                            source=r["source"],
-                        )
+    if individual:
+        if len(rows) >= MAX_ITEMS:
+            logger.warning("Pothole read hit the %d-item cap; payload truncated.", MAX_ITEMS)
+        for r in rows:
+            if detail:
+                last_seen = r["last_seen"]
+                items.append(
+                    PotholeItem(
+                        id=r["cluster_id"],
+                        lat=r["lat"],
+                        lon=r["lon"],
+                        severity=r["severity"],
+                        confidence=r["confidence"],
+                        observation_count=r["observation_count"],
+                        distinct_devices=r["distinct_devices"],
+                        last_seen=last_seen.isoformat() if last_seen else None,
+                        source=r["source"],
                     )
-                else:
-                    items.append(
-                        PublicPotholeItem(id=r["cluster_id"], lat=r["lat"], lon=r["lon"])
+                )
+            else:
+                items.append(PublicPotholeItem(id=r["cluster_id"], lat=r["lat"], lon=r["lon"]))
+    else:
+        for r in rows:
+            if detail:
+                items.append(
+                    ClusterAggItem(
+                        centroid_lat=r["centroid_lat"],
+                        centroid_lon=r["centroid_lon"],
+                        count=r["count"],
+                        max_severity=r["max_severity"],
                     )
-        else:
-            # One tile-width in degrees at this zoom; coarser cells at lower zoom.
-            cell_deg = 360.0 / (2 ** zoom)
-            rows = await conn.fetch(
-                _AGGREGATE_SQL,
-                min_devices, window_days, min_lon, min_lat, max_lon, max_lat, since,
-                cell_deg,
-            )
-            for r in rows:
-                if detail:
-                    items.append(
-                        ClusterAggItem(
-                            centroid_lat=r["centroid_lat"],
-                            centroid_lon=r["centroid_lon"],
-                            count=r["count"],
-                            max_severity=r["max_severity"],
-                        )
+                )
+            else:
+                items.append(
+                    PublicClusterItem(
+                        centroid_lat=r["centroid_lat"],
+                        centroid_lon=r["centroid_lon"],
+                        count=r["count"],
                     )
-                else:
-                    items.append(
-                        PublicClusterItem(
-                            centroid_lat=r["centroid_lat"],
-                            centroid_lon=r["centroid_lon"],
-                            count=r["count"],
-                        )
-                    )
+                )
 
     if detail:
         return PotholesResponse(items=items, generated_at=generated_at, next_since=generated_at)
