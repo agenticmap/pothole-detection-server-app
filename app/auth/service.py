@@ -85,6 +85,29 @@ async def authenticate_and_issue(pool: asyncpg.Pool, *, email: str, password: st
         return await _issue_tokens(conn, user["user_id"], org_id, role)
 
 
+async def revoke_refresh_token(pool: asyncpg.Pool, *, refresh_token: str) -> bool:
+    """Revoke a single refresh token. Returns whether it was live before the call.
+
+    Deliberately does not raise on an unknown, already-revoked or expired token:
+    logout is idempotent, and a caller who can distinguish "revoked something"
+    from "that token was never valid" has a token-probing oracle. The route
+    discards the return value and always answers 204; it exists for the log line
+    and for tests.
+
+    Scoped to the presented token, so signing out one browser leaves this
+    account's other sessions alone.
+    """
+    token_hash = _hash_token(refresh_token)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE refresh_token SET revoked_at = now() "
+            "WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now() "
+            "RETURNING token_id",
+            token_hash,
+        )
+    return row is not None
+
+
 async def refresh_tokens(pool: asyncpg.Pool, *, refresh_token: str) -> dict:
     """Rotate a refresh token: revoke the presented one, issue a fresh pair."""
     token_hash = _hash_token(refresh_token)

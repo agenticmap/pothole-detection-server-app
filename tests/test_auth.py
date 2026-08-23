@@ -151,6 +151,57 @@ async def test_refresh_rotates_and_revokes_old(client, db_pool):
     assert reuse.status_code == 401
 
 
+async def test_logout_revokes_the_refresh_token(client, db_pool):
+    """Regression: logout did not exist, so a signed-out session kept a valid
+    refresh token server-side for its full 30-day lifetime."""
+    async with db_pool.acquire() as conn:
+        await _seed_staff(conn)
+    rt = (await _login(client))["refresh_token"]
+
+    out = await client.post("/api/v1/auth/logout", headers=V, json={"refresh_token": rt})
+    assert out.status_code == 204
+
+    # The revoked token can no longer be exchanged.
+    resp = await client.post("/api/v1/auth/refresh", headers=V, json={"refresh_token": rt})
+    assert resp.status_code == 401
+
+
+async def test_logout_is_idempotent_and_does_not_probe(client, db_pool):
+    """Logout must not reveal whether a token was real — always 204."""
+    async with db_pool.acquire() as conn:
+        await _seed_staff(conn)
+    rt = (await _login(client))["refresh_token"]
+
+    assert (await client.post(
+        "/api/v1/auth/logout", headers=V, json={"refresh_token": rt}
+    )).status_code == 204
+    # Second time: already revoked.
+    assert (await client.post(
+        "/api/v1/auth/logout", headers=V, json={"refresh_token": rt}
+    )).status_code == 204
+    # Never issued at all.
+    assert (await client.post(
+        "/api/v1/auth/logout", headers=V, json={"refresh_token": "not-a-real-token"}
+    )).status_code == 204
+
+
+async def test_logout_leaves_other_sessions_alone(client, db_pool):
+    """Signing out one browser must not sign the account out everywhere."""
+    async with db_pool.acquire() as conn:
+        await _seed_staff(conn)
+    first = (await _login(client))["refresh_token"]
+    second = (await _login(client))["refresh_token"]
+    assert first != second
+
+    assert (await client.post(
+        "/api/v1/auth/logout", headers=V, json={"refresh_token": first}
+    )).status_code == 204
+
+    # The other session still works.
+    resp = await client.post("/api/v1/auth/refresh", headers=V, json={"refresh_token": second})
+    assert resp.status_code == 200
+
+
 # ── DB-backed: detail-endpoint gating ─────────────────────────────────────────
 
 async def test_detail_without_token_is_401(client, db_pool):

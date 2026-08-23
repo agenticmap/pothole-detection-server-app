@@ -23,19 +23,35 @@ LAT, LON = 43.6532, -79.3832
 REPAIR_URL = "/api/v1/clusters/clu_a/repair"
 
 
-async def _insert_cluster(conn, cluster_id="clu_a", *, lat=LAT, lon=LON, repaired=False):
+# The org the test bearer token carries (see tests/test_tiles.auth).
+CALLER_ORG = "org_x"
+
+
+async def _insert_cluster(
+    conn, cluster_id="clu_a", *, lat=LAT, lon=LON, repaired=False, org_id=CALLER_ORG,
+):
+    """Seed a cluster owned by the calling org unless told otherwise.
+
+    org_id defaults to the caller's because migrations/009 scopes repair writes:
+    a cluster owned by another org, or unowned, is not a repair the default
+    `staff` token may make. Those cases are covered in TestRepairOrgScoping.
+    """
+    if org_id is not None:
+        await conn.execute(
+            "INSERT INTO org (org_id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING", org_id
+        )
     await conn.execute(
         """
         INSERT INTO asset_cluster (
             cluster_id, asset_type, centroid, severity, confidence,
-            observation_count, distinct_devices, last_seen, source, repaired_at
+            observation_count, distinct_devices, last_seen, source, repaired_at, org_id
         ) VALUES (
             $1, 'pothole', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
             2.5, 0.9, 3, 2, now(), 'crowd',
-            CASE WHEN $4 THEN now() ELSE NULL END
+            CASE WHEN $4 THEN now() ELSE NULL END, $5
         )
         """,
-        cluster_id, lon, lat, repaired,
+        cluster_id, lon, lat, repaired, org_id,
     )
 
 
@@ -256,8 +272,12 @@ class TestClusteringInteraction:
 
     @pytest.fixture(autouse=True)
     async def _staff(self, db_pool):
+        # admin, not staff: the clustering job writes no org_id, so every cluster
+        # it creates is unowned and only an admin may repair it. Stated directly
+        # in test_job_created_cluster_is_admin_only -- a live limitation, not a
+        # detail of this fixture.
         async with db_pool.acquire() as conn:
-            await _make_staff(conn)
+            await _make_staff(conn, role="admin")
 
     async def _seed_members(self, conn, *, count=4, lat=LAT, lon=LON):
         for i in range(count):
@@ -281,7 +301,7 @@ class TestClusteringInteraction:
         async with db_pool.acquire() as conn:
             cluster_id = await conn.fetchval("SELECT cluster_id FROM asset_cluster")
         resp = await client.post(
-            f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth()
+            f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth("admin")
         )
         assert resp.status_code == 200
         repaired_at = resp.json()["repaired_at"]
@@ -318,7 +338,7 @@ class TestClusteringInteraction:
             await client.post(
                 f"/api/v1/clusters/{cluster_id}/repair",
                 json={"repaired": True},
-                headers=auth(),
+                headers=auth("admin"),
             )
             return result
 
@@ -339,7 +359,7 @@ class TestClusteringInteraction:
         async with db_pool.acquire() as conn:
             cluster_id = await conn.fetchval("SELECT cluster_id FROM asset_cluster")
         await client.post(
-            f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth()
+            f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth("admin")
         )
 
         # Detections dated after the repair: the defect returned.
@@ -364,3 +384,100 @@ class TestClusteringInteraction:
         assert len(rows) == 2, "a post-repair recurrence should form a new cluster"
         assert rows[0]["repaired_at"] is not None
         assert rows[1]["repaired_at"] is None
+
+
+# ── Per-municipality write scoping (migrations/009) ───────────────────────────
+
+class TestRepairOrgScoping:
+    """Before migrations/009, any staff member of any org could repair any
+    city's clusters. Reads are still global; these pin the write boundary."""
+
+    async def test_staff_may_repair_own_orgs_cluster(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="staff")
+            await _insert_cluster(conn, org_id=CALLER_ORG)
+        resp = await client.post(REPAIR_URL, json={"repaired": True}, headers=auth())
+        assert resp.status_code == 200
+
+    async def test_staff_may_not_repair_another_orgs_cluster(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="staff")
+            await _insert_cluster(conn, org_id="org_other_city")
+        resp = await client.post(REPAIR_URL, json={"repaired": True}, headers=auth())
+        assert resp.status_code == 403
+        # 403 rather than 404: the cluster is already visible to them on reads.
+        assert "another organization" in resp.json()["detail"]
+
+    async def test_admin_of_another_org_still_may_not(self, client, db_pool):
+        """Ownership is not overridden by rank — admin is not a cross-tenant key."""
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="admin")
+            await _insert_cluster(conn, org_id="org_other_city")
+        resp = await client.post(REPAIR_URL, json={"repaired": True}, headers=auth("admin"))
+        assert resp.status_code == 403
+
+    async def test_unowned_cluster_is_admin_only(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="staff")
+            await _insert_cluster(conn, org_id=None)
+        resp = await client.post(REPAIR_URL, json={"repaired": True}, headers=auth())
+        assert resp.status_code == 403
+
+    async def test_admin_may_repair_an_unowned_cluster(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="admin")
+            await _insert_cluster(conn, org_id=None)
+        resp = await client.post(REPAIR_URL, json={"repaired": True}, headers=auth("admin"))
+        assert resp.status_code == 200
+
+    async def test_refused_repair_writes_nothing(self, client, db_pool):
+        """A 403 must leave no state change and no audit row."""
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="staff")
+            await _insert_cluster(conn, org_id="org_other_city")
+
+        resp = await client.post(REPAIR_URL, json={"repaired": True}, headers=auth())
+        assert resp.status_code == 403
+
+        async with db_pool.acquire() as conn:
+            assert await conn.fetchval(
+                "SELECT repaired_at FROM asset_cluster WHERE cluster_id = 'clu_a'"
+            ) is None
+            assert await conn.fetchval("SELECT count(*) FROM repair_log") == 0
+
+    async def test_job_created_cluster_is_admin_only(self, client, db_pool):
+        """The live consequence of not backfilling org_id, stated outright.
+
+        The clustering job sets no org_id, so every cluster the pipeline produces
+        is unowned and a plain `staff` operator cannot close it out -- which is
+        the normal operator workflow. Fail-closed was the deliberate choice over
+        asserting ownership nobody had established, but until the job learns to
+        assign an owner, repair is effectively an admin action. Recorded as a
+        test so the limitation cannot be forgotten.
+        """
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="staff")
+            for i in range(4):
+                cid = f"scoped-obs-{i}"
+                await insert_observation(
+                    conn, cid, device_id=f"dev-{i % 2}", lat=LAT, lon=LON,
+                    ts="2026-05-27T10:30:00+00:00",
+                )
+                await conn.execute(
+                    "UPDATE asset_observation SET sensor_class = 'pothole', "
+                    "sensor_p_pothole = 0.9, sensor_severity = 0.5, "
+                    "sensor_is_outlier = FALSE WHERE client_id = $1",
+                    cid,
+                )
+        assert await run_cluster_job(db_pool) == 1
+
+        async with db_pool.acquire() as conn:
+            cluster_id = await conn.fetchval("SELECT cluster_id FROM asset_cluster")
+            assert await conn.fetchval(
+                "SELECT org_id FROM asset_cluster WHERE cluster_id = $1", cluster_id
+            ) is None
+
+        resp = await client.post(
+            f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth()
+        )
+        assert resp.status_code == 403

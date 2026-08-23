@@ -741,15 +741,28 @@ per panel open, the single-flight refresh) that a framework would have handled.
 - **Shipping the bundle in Docker** — needs a `node:22` build stage (see "Running it").
 - **Browser support.** MapLibre 6 requires **WebGL2**; the app shows a plain message rather
   than a blank screen if it is missing, which is realistic over RDP or in a VM.
-- **`POST /api/v1/auth/logout`.** Does not exist. Clearing client memory leaves a valid
-  30-day refresh token in `refresh_token` server-side.
+- ~~**`POST /api/v1/auth/logout`.** Does not exist.~~ **Shipped.** Revokes the presented
+  refresh token and answers 204 unconditionally, so it cannot be used to probe whether a token
+  is real. Scoped to the one token, so other sessions survive. The access token stays valid
+  until it expires (30 min) — revoking that needs a denylist, which this gap did not justify.
 - **Back/forward navigation** does not restore state (no `hashchange` listener).
-- **Per-municipality scoping.** `asset_cluster` has no `org_id`, so **any staff member of any
-  org can repair any city's clusters**. Reads were already global; the write endpoint makes it
-  matter. Direct consequence of the deferred RLS in `005_auth.sql`.
-- **EXIF / PII in frames.** Road JPEGs contain plates, faces and house numbers, and
-  `_store_jpeg_local` writes client bytes verbatim including any GPS EXIF. Serving them to
-  every `viewer` is a larger exposure than anything `device_ref` guarded.
+- ~~**Per-municipality scoping.**~~ **Writes are scoped** (`migrations/009_org_scoping.sql`).
+  `asset_cluster.org_id` was added **without a backfill**: matching org → allowed, mismatched →
+  403 even for an admin, `NULL` (unowned) → admin only. Enforced in `repair_service` inside the
+  same transaction as the row's `FOR UPDATE`, so ownership cannot change between the check and
+  the write. **Reads are still global.**
+  - **Live limitation:** the clustering job sets no `org_id`, so everything the pipeline
+    produces is unowned and therefore admin-only to repair — the normal `staff` operator
+    workflow. Pinned by `test_job_created_cluster_is_admin_only`. Assigning an owner in the job
+    needs a device→org mapping that does not exist yet; the alternative (backfilling one default
+    org) was rejected as asserting ownership nobody established.
+- ~~**EXIF / PII in frames.**~~ **Metadata is stripped on ingest**
+  (`app/services/jpeg_metadata.py`), before the write, so the archive never holds it and no
+  backup can. Lossless segment removal rather than an image-library re-encode: APP1 (EXIF/XMP,
+  where the GPS IFD lives), APP3–APP13, APP15 and COM are dropped; APP0/APP2/APP14 are kept so
+  colour rendering is unaffected; the entropy-coded scan is copied byte for byte.
+  - **Still open:** plates and faces are in the *pixels*. Redacting those is a detection model,
+    not a parser.
 - **Unrepair can orphan a duplicate.** Un-repairing a cluster when another non-repaired one
   sits within `cluster_eps_m` leaves two; the next run updates only the nearest and the loser
   lingers until it ages out of the window.

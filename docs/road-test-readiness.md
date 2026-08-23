@@ -209,7 +209,7 @@ Test rows were removed afterwards so they do not pollute the sensor-model fit.
   collected drive data. It now targets `pothole_test` behind an allow-list guard. One-time
   setup: `docker compose exec postgres createdb -U pothole pothole_test`.
 - **Repair marking no longer needs raw SQL** — `POST /api/v1/clusters/{id}/repair`, audited.
-- Test count is now **240**, not the 105 quoted below.
+- Test count is now **264**, not the 105 quoted below.
 
 ## Known gaps (not blocking a drive)
 

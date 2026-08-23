@@ -22,6 +22,13 @@ Two things here are load-bearing and easy to get wrong:
    (Related pre-existing gap, not fixed here: because that filter also has
    `repaired_at IS NULL`, an incremental client sees a repaired cluster simply
    vanish rather than receiving a tombstone.)
+
+3. Authorization is enforced here, not only in the route's role dependency.
+   Until migrations/009 added asset_cluster.org_id, any staff member of any org
+   could repair any city's clusters. The check has to happen after the row is
+   locked -- reading the owner, deciding, and then writing in separate
+   transactions would let a concurrent re-assignment slip between them -- so it
+   sits inside the same transaction as the FOR UPDATE rather than in the route.
 """
 
 from __future__ import annotations
@@ -35,24 +42,28 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
-# FOR UPDATE serialises two operators clicking at once. The whole thing is one
-# statement, so it runs in asyncpg's implicit transaction.
+# FOR UPDATE serialises two operators clicking at once, and holds the row across
+# the authorization decision below. Split from the write deliberately: the owner
+# has to be read under the same lock that the UPDATE runs in.
+_LOCK_SQL = """
+SELECT cluster_id, repaired_at, org_id
+FROM asset_cluster
+WHERE cluster_id = $1
+FOR UPDATE
+"""
+
 # $1=cluster_id $2=repaired $3=repair_id $4=note $5=user_id $6=org_id
 _REPAIR_SQL = """
-WITH target AS (
-    SELECT cluster_id, repaired_at
-    FROM asset_cluster
-    WHERE cluster_id = $1
-    FOR UPDATE
-), upd AS (
+WITH upd AS (
     UPDATE asset_cluster c
        SET repaired_at = CASE WHEN $2::boolean THEN now() ELSE NULL END,
            updated_at  = now()
-      FROM target t
-     WHERE c.cluster_id = t.cluster_id
+     WHERE c.cluster_id = $1
        -- Only when the state actually changes: currently-open (repaired_at IS
-       -- NULL) must differ from the requested state.
-       AND (t.repaired_at IS NULL) = $2::boolean
+       -- NULL) must differ from the requested state. Redundant with the caller's
+       -- check now that the row is locked, but kept so the invariant survives
+       -- any future caller that forgets it.
+       AND (c.repaired_at IS NULL) = $2::boolean
     RETURNING c.cluster_id, c.repaired_at
 ), logged AS (
     INSERT INTO repair_log (
@@ -65,11 +76,13 @@ WITH target AS (
     RETURNING repair_id
 )
 SELECT
-    (SELECT count(*) FROM target)::int AS found,
-    (SELECT count(*) FROM upd)::int    AS changed,
-    (SELECT repaired_at FROM target)   AS previous_repaired_at,
-    (SELECT repaired_at FROM upd)      AS new_repaired_at
+    (SELECT count(*) FROM upd)::int AS changed,
+    (SELECT repaired_at FROM upd)   AS new_repaired_at
 """
+
+# Repairing an unowned (org_id IS NULL) cluster takes an admin. Everything else
+# requires the caller's org to match the cluster's owner.
+_ADMIN_ROLE = "admin"
 
 
 @dataclass(frozen=True)
@@ -80,6 +93,7 @@ class RepairOutcome:
     changed: bool
     repaired_at: datetime | None
     repair_id: str | None
+    authorized: bool = True
 
 
 async def set_repair_state(
@@ -90,24 +104,59 @@ async def set_repair_state(
     note: str | None,
     user_id: str,
     org_id: str | None,
+    role: str,
 ) -> RepairOutcome:
     """Mark a cluster repaired or reopen it. Returns what changed.
 
-    ``found=False``  → no such cluster (404).
-    ``changed=False`` → already in the requested state; nothing written, no audit row.
+    ``found=False``      → no such cluster (404).
+    ``authorized=False`` → the caller's org does not own it (403).
+    ``changed=False``    → already in the requested state; nothing written, no audit row.
+
+    Ownership rules (migrations/009):
+      * cluster.org_id matches the caller's org → allowed at the route's role floor.
+      * cluster.org_id IS NULL (unowned backlog) → 'admin' only.
+      * otherwise → refused, even for an admin of another org.
     """
     repair_id = f"rpr_{uuid4().hex}"
 
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            _REPAIR_SQL, cluster_id, repaired, repair_id, note, user_id, org_id
-        )
+        # One transaction: the row stays locked from the ownership read through
+        # the write, so the owner cannot change underneath the decision.
+        async with conn.transaction():
+            target = await conn.fetchrow(_LOCK_SQL, cluster_id)
+            if target is None:
+                return RepairOutcome(
+                    found=False, changed=False, repaired_at=None, repair_id=None
+                )
 
-    found = bool(row["found"])
+            owner = target["org_id"]
+            if owner is None:
+                permitted = role == _ADMIN_ROLE
+            else:
+                permitted = owner == org_id
+
+            if not permitted:
+                logger.warning(
+                    "Refused cross-org repair: cluster=%s owner=%s caller_org=%s "
+                    "user=%s role=%s",
+                    cluster_id, owner, org_id, user_id, role,
+                )
+                return RepairOutcome(
+                    found=True,
+                    changed=False,
+                    repaired_at=target["repaired_at"],
+                    repair_id=None,
+                    authorized=False,
+                )
+
+            row = await conn.fetchrow(
+                _REPAIR_SQL, cluster_id, repaired, repair_id, note, user_id, org_id
+            )
+
     changed = bool(row["changed"])
     # On a no-op the UPDATE returned nothing, so the current value is the one the
     # row already had.
-    repaired_at = row["new_repaired_at"] if changed else row["previous_repaired_at"]
+    repaired_at = row["new_repaired_at"] if changed else target["repaired_at"]
 
     if changed:
         logger.info(
@@ -115,7 +164,7 @@ async def set_repair_state(
             cluster_id, repaired, user_id, org_id,
         )
     return RepairOutcome(
-        found=found,
+        found=True,
         changed=changed,
         repaired_at=repaired_at,
         repair_id=repair_id if changed else None,

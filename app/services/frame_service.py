@@ -10,6 +10,7 @@ import asyncpg
 
 from app.config import settings
 from app.models.frames import FrameMetadata, FrameUploadResponse
+from app.services.jpeg_metadata import strip_jpeg_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,18 @@ async def store_frame(
     Returns a FrameUploadResponse. Idempotent: duplicate client_ids are
     silently accepted without overwriting the existing file.
     """
-    # ── Store JPEG ────────────────────────────────────────────────────────────
-    jpeg_url = await _store_jpeg(device_id, metadata.client_id, jpeg_bytes)
+    # ── Strip metadata, then store ────────────────────────────────────────────
+    # Done here rather than in a backend so local and Supabase storage both get
+    # it, and done before the write so the archive never holds the EXIF at all
+    # (scrubbing later would leave it in any backup taken in between).
+    clean_bytes = strip_jpeg_metadata(jpeg_bytes)
+    if len(clean_bytes) != len(jpeg_bytes):
+        logger.debug(
+            "Stripped %d bytes of JPEG metadata from frame %s",
+            len(jpeg_bytes) - len(clean_bytes), metadata.client_id,
+        )
+
+    jpeg_url = await _store_jpeg(device_id, metadata.client_id, clean_bytes)
 
     # ── Serialize detections to JSON string for JSONB column ──────────────────
     detections_json: str | None = None

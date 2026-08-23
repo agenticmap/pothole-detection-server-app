@@ -15,9 +15,11 @@ POST, not PATCH, for the repair action: it is a command with an audit trail
 rather than a partial-resource update. (It also avoids widening CORS
 allow_methods in app/main.py, but that is a consequence, not the reason.)
 
-Known authorization gap, inherited from the deferred RLS in 005_auth.sql:
-asset_cluster has no org_id, so any staff member of any org can repair any
-city's clusters. Reads were already global; the write endpoint makes it matter.
+Authorization scope: reads on this router are global -- any staff member of any
+org sees every city's clusters. WRITES are not. migrations/009 added
+asset_cluster.org_id and repair_service refuses a cross-org repair (403), which
+closes the gap the deferred RLS in 005_auth.sql left open. Clusters with a NULL
+org_id are the unowned backlog and take an admin to touch.
 
 Client note for the dashboard: <img src="…/image"> CANNOT send an Authorization
 header, so these images must be fetched with the bearer token and turned into
@@ -206,9 +208,18 @@ async def repair_cluster(
         note=body.note,
         user_id=staff.user_id,
         org_id=staff.org_id,
+        role=staff.role,
     )
     if not outcome.found:
         raise HTTPException(status_code=404, detail="No such cluster.")
+    if not outcome.authorized:
+        # 403, not 404: the caller holds a valid staff token and the cluster is
+        # visible to them on the map and in the detail panel already, so
+        # pretending it does not exist would only be confusing. Reads stay global
+        # (see the note above); this bounds the write.
+        raise HTTPException(
+            status_code=403, detail="This cluster belongs to another organization."
+        )
 
     return RepairResponse(
         cluster_id=cluster_id,

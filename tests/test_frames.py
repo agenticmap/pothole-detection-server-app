@@ -158,9 +158,7 @@ class TestFramesValidation:
             "lon": -79.3832,
             "device_p_on_device": 0.5,
         }
-        # This should pass validation (may fail on DB if postgres isn't running)
-        metadata_bytes = json.dumps(meta).encode()
-        # We just verify the metadata model validates successfully
+        # Model-level validation only; this case never reaches the endpoint.
         from app.models.frames import FrameMetadata
 
         parsed = FrameMetadata(**meta)
@@ -281,3 +279,69 @@ class TestFramesRateLimit:
             assert exc_info.value.status_code == 429
         finally:
             settings.rate_limit_frames_per_hour = original
+
+
+class TestFrameMetadataScrubbing:
+    """Uploaded JPEGs must reach disk without their EXIF (Phase 2.5 security gap)."""
+
+    @staticmethod
+    def _jpeg_with_gps() -> bytes:
+        import io
+
+        from PIL import Image
+        from PIL.TiffImagePlugin import IFDRational
+
+        img = Image.new("RGB", (24, 16), (77, 88, 99))
+        exif = img.getexif()
+        exif[0x010F] = "UploadedPhoneMaker"
+        gps = exif.get_ifd(0x8825)
+        gps[1] = "N"
+        gps[2] = (IFDRational(43), IFDRational(39), IFDRational(11))
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", exif=exif, quality=90)
+        return buf.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_stored_jpeg_has_no_exif(self, client, db_pool):
+        """The bytes on disk carry no GPS, so no backup or operator view can leak it."""
+        from pathlib import Path
+
+        from app.services.frame_service import resolve_local_frame_path
+
+        original = self._jpeg_with_gps()
+        assert b"Exif\x00\x00" in original  # the fixture is meaningful
+
+        client_id = "frame-exif-001"
+        meta = make_valid_frame_metadata()
+        meta["client_id"] = client_id
+        response = await client.post(
+            "/api/v1/frames",
+            headers={"X-Device-Id": "exif-device", "Accept-Version": "v1"},
+            files={
+                "metadata": ("metadata.json", json.dumps(meta).encode(), "application/json"),
+                "frame": ("frame.jpg", original, "image/jpeg"),
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        jpeg_url = response.json().get("jpeg_url")
+        async with db_pool.acquire() as conn:
+            if not jpeg_url:
+                jpeg_url = await conn.fetchval(
+                    "SELECT jpeg_url FROM asset_frame WHERE client_id = $1", client_id
+                )
+        assert jpeg_url
+
+        stored = Path(resolve_local_frame_path(jpeg_url)).read_bytes()
+        assert b"Exif\x00\x00" not in stored
+        assert b"UploadedPhoneMaker" not in stored
+        assert len(stored) < len(original)
+
+        # Still a usable image for the operator dashboard.
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(stored))
+        img.load()
+        assert img.size == (24, 16)
