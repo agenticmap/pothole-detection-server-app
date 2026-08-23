@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-16
+updated: 2026-08-23
 ---
 
 # Road-Test Readiness
@@ -133,7 +133,7 @@ a new `LOG_LEVEL` setting (default INFO).
 - **Schema** — migrations 001–006 applied.
 - **Storage** — frame JPEGs land at `storage/frames/<device_id>/<client_id>.jpg`; the directory
   is created on first write.
-- **Tests** — **105 passed** against local PostGIS on `:5433`.
+- **Tests** — **264 passed** against local PostGIS on `:5433` (105 when this section was first written).
 
 ## 🟡 Expected — know before you drive
 
@@ -161,7 +161,8 @@ a new `LOG_LEVEL` setting (default INFO).
 
 ## Pre-drive checklist
 
-1. **DB + tests green**: `docker compose up -d`, then `pytest -q` → 105 passed.
+1. **DB + tests green**: `docker compose up -d`, then `pytest -q` → 264 passed.
+   Point `DATABASE_URL` at `pothole_test` first — the fixtures TRUNCATE every table.
 2. **Confirm the frames fix** with a filename-less part (the shape the client actually sends):
    ```bash
    B=----OkHttpBoundary
@@ -209,7 +210,30 @@ Test rows were removed afterwards so they do not pollute the sensor-model fit.
   collected drive data. It now targets `pothole_test` behind an allow-list guard. One-time
   setup: `docker compose exec postgres createdb -U pothole pothole_test`.
 - **Repair marking no longer needs raw SQL** — `POST /api/v1/clusters/{id}/repair`, audited.
-- Test count is now **264**, not the 105 quoted below.
+- Test count is now **264** (was 105 when this document was written, then 206). The counts
+  above have been updated in place; per-phase docs keep their own historical figures.
+
+### Phase 2.6 first pass (2026-08-23) — [`phase-2.6-hardening.md`](./phase-2.6-hardening.md)
+
+Relevant to a drive:
+
+- **`GET /api/v1/potholes` no longer 500s** on a bbox wider than 180° of longitude — PostGIS's
+  antipodal-edge error reached the client as a server fault on the one public, unauthenticated
+  endpoint. Now a 400.
+- **Migrations are tracked and run in every environment.** `ENV=production` against a fresh
+  database used to create no tables; the `schema_migrations` ledger applies each file at most
+  once under an advisory lock. Existing databases re-apply all files once, harmlessly.
+- **`GET /health` returns a real 503** when the database is unreachable, so an uptime check can
+  finally detect a dead DB. Watch for this if you script a pre-drive check on `curl -f`.
+- **`run_fit_job` is single-flight** (`0x504F57`), so two `--workers` cannot race the
+  sensor-model activation index mid-drive.
+- **`docker compose up -d` now starts the API too**, with the dashboard built into the image and
+  a healthcheck. It conflicts with a hand-run `uvicorn` on 8000 — use one or the other.
+- **Frame JPEGs are stored without EXIF.** Post-drive analysis that expected to read GPS or
+  timestamps *out of the image files* must use `asset_frame` columns instead; the geometry and
+  `ts_utc` were always carried in the metadata part, not the EXIF.
+- **Repair writes are org-scoped.** Clusters the clustering job creates have no `org_id` and are
+  therefore **admin-only** to mark repaired — provision your post-drive operator as `admin`.
 
 ## Known gaps (not blocking a drive)
 

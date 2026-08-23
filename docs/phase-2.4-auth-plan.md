@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-16
+updated: 2026-08-23
 ---
 
 # Phase 2.4 — City-staff auth tier (server side)
@@ -36,6 +36,7 @@ This phase introduces a **second identity tier**. The device-ID-only anonymous t
 - **`app/dependencies.py`** — `get_current_staff` (HTTPBearer, 401 + `WWW-Authenticate`)
   and the `CurrentStaff` type alias. Applied **only** to staff routes.
 - **`app/routes/auth.py`** — `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`,
+  `POST /api/v1/auth/logout` (added in Phase 2.6),
   `GET /.well-known/jwks.json`.
 - **Read path split** (`routes/potholes.py`, `services/cluster_query_service.py`,
   `models/potholes.py`):
@@ -91,12 +92,19 @@ asserts detail fields are **absent**. Full suite: 86 passed.
 
 ## Out of scope (later)
 - OIDC/SSO issuer swap (Phase 2 of the staged path).
-- Per-municipality RLS data scoping (columns ready; policies not written). **Now visible:**
-  `asset_cluster` has no `org_id`, so the Phase 2.5 repair endpoint lets any staff member of
-  any org mutate any city's clusters.
+- Per-municipality data scoping — **writes resolved in Phase 2.6**, reads still global.
+  `migrations/009` added `asset_cluster.org_id` and `repair_service` refuses a cross-org repair
+  (403), so a staff member of one municipality can no longer mutate another's clusters. Enforced
+  in the API rather than as RLS: the API is the only writer, and an RLS policy would need a
+  per-request `SET LOCAL` to see the caller's org through the shared asyncpg pool. Narrowing
+  *reads* (`/tiles/*`, `/clusters/*`, `/potholes/detail`) is still open. See
+  [`phase-2.6-hardening.md`](./phase-2.6-hardening.md) §6.
 - ~~Repair-management~~ **shipped in Phase 2.5** (`POST /api/v1/clusters/{id}/repair`).
   Export / raw-data staff entitlements are still unbuilt.
 - Timing-uniform login (verify hash even for missing users).
+- Access-token revocation. Phase 2.6 added `POST /api/v1/auth/logout`, which revokes the
+  *refresh* token; the stateless access token stays valid until it expires
+  (`auth_access_token_ttl_minutes`, default 30). Killing it sooner needs a denylist.
 
 ## Follow-ups landed in Phase 2.5
 

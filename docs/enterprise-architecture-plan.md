@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-16
+updated: 2026-08-23
 ---
 
 # Enterprise Architecture & Development Plan
@@ -350,7 +350,7 @@ This roadmap **extends** [`docs/roadmap.md`](./roadmap.md); it does not replace 
 | **P2.3 — Server-side detection model** | `roadmap.md` §2.3 | Server / ML | ✅ Shipped (gated off) — `phase-2.3-detection-plan.md` | — |
 | **P2.4 — City-staff auth tier** | `phase-2.4-auth-plan.md` | Server | ✅ Shipped | — |
 | **P2.5 — Operator dashboard MVP** | This doc §4.5 (was "P2.3") | Web + Server | ✅ Shipped — `phase-2.5-dashboard-plan.md` | 3–4 weeks |
-| **P2.6 — Production hardening** | `roadmap.md` §2.8–2.10 + `road-test-readiness.md` "Known gaps" | Server / Ops | 📋 Planned | — |
+| **P2.6 — Production hardening** | `phase-2.6-hardening.md`; refines `roadmap.md` §2.8–2.10 + `road-test-readiness.md` "Known gaps" | Server / Ops | 🟡 In progress — startup-path fixes, container deployment and the Phase 2.5 security leftovers landed; §2.8 abuse/throughput work outstanding | — |
 | **P2.7 — Pilot deployment** | This doc §4.6 (was "P2.4") | Ops | 📋 Planned | 2 weeks |
 | **P3 ✱** | `roadmap.md` §"Phase 3" | Mobile | 📋 Planned | (existing) |
 | **P3.5 — Fusion engine v2 (refined weights, async retraining)** | This doc §4.7 (new) | ML | Rolling | rolling |

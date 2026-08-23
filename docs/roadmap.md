@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-16
+updated: 2026-08-23
 ---
 
 # Pothole Detection — Roadmap
@@ -45,6 +45,7 @@ This document tracks the full multi-phase plan for the app. Shipped phases get a
 | 2 | ✅ Built (2.0–2.4) | Server backend + sensor↔visual fusion + crowd clustering + read path + staff auth |
 | 2.5 | ✅ Shipped | Operator dashboard: vector tiles, detail panel, repair marking, and the browser console (`dashboard/`). |
 | 2.5b/c | ✅ Shipped | Dashboard design pass: Organic skin, self-hosted Protomaps vector basemap, KPI/filter dock + `/clusters/stats`, severity recalibrated to the real [0,1] scale, and a synthetic demo seed. Fixed a MapLibre worker 404 that had meant **no vector tile ever loaded**. |
+| 2.6 | 🟡 In progress | Production hardening: public-read 500 fix, real `/health` 503, fit-job advisory lock, `schema_migrations` ledger, containerised dashboard/basemap, org-scoped repair writes, EXIF stripped on ingest, `POST /auth/logout`. See [`phase-2.6-hardening.md`](./phase-2.6-hardening.md). |
 | 3 | 📋 Planned | On-device ML upgrade + labeled-data flywheel |
 | 4 | 📋 Planned | Production hardening + public release |
 
@@ -251,7 +252,11 @@ Response 200:
 > **Partly stale.** The per-device limits shipped at **5000/hour** (a drive's buffered data
 > drains in one burst — see `road-test-readiness.md`), and the limiter is in-memory per
 > worker, not table-backed. Per-IP rules, the storage budget, frame GC and shadow-ban are all
-> still unimplemented; they are the bulk of Phase 2.6.
+> still unimplemented; they are what remains of Phase 2.6 after its first pass
+> ([`phase-2.6-hardening.md`](./phase-2.6-hardening.md)), which took the startup-path
+> correctness fixes, the container deployment story and the Phase 2.5 security leftovers
+> instead. Note `migrations/001` already carries an unused `device_rate_limit` table for the
+> table-backed limiter.
 
 - Per-device: 100 events/hour + 100 frames/hour, enforced via a `rate_limit` table or RLS function. 429 on excess.
 - Per-IP: Cloudflare in front of Supabase, default rule "100 requests/minute per IP".
@@ -266,7 +271,11 @@ Response 200:
 > on a live database was the only option before. The "v2 dashboard" below is being built as
 > the operator dashboard (MapLibre rather than Next.js); its server side is done, the browser
 > frontend is not. See [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
-> Bulk shadow-ban and manual `verified` cluster creation remain unimplemented.
+> Bulk shadow-ban and manual `verified` cluster creation remain unimplemented. Repair
+> writes are now **org-scoped** — `migrations/009` added `asset_cluster.org_id`, so a
+> staff member of one municipality can no longer close out another's clusters; see
+> [`phase-2.6-hardening.md`](./phase-2.6-hardening.md) §6 (including why unowned clusters
+> are admin-only). Reads are still global.
 
 Phase 2 v1: **Supabase Studio**. Direct SQL for repair updates, bulk shadow-ban, manual `verified` cluster creation.
 

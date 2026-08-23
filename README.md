@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-16
+updated: 2026-08-23
 ---
 
 # Pothole Detection — Ingestion Server
@@ -32,7 +32,21 @@ cd server
 docker compose up -d
 ```
 
-This launches PostgreSQL 16 with PostGIS on **`localhost:5433`** (compose maps host 5433 -> container 5432; the service is named `postgres`). The migration SQL (`migrations/001_initial_schema.sql`) runs automatically on first boot via the `docker-entrypoint-initdb.d` volume mount.
+This launches PostgreSQL 16 with PostGIS on **`localhost:5433`** (compose maps host 5433 -> container 5432; the service is named `postgres`).
+
+Compose also defines an **`app`** service — the API on `:8000`, with the operator dashboard built
+into the image and a healthcheck. So `docker compose up -d` is the whole stack, and steps 2–4
+below are the *alternative* to it for local development, not a follow-on. Running both at once
+fails with "port is already allocated".
+
+```bash
+docker compose up -d            # database + API + dashboard
+docker compose up -d postgres   # database only, then run uvicorn by hand (steps 2-4)
+```
+
+Migrations are applied by the server at startup and tracked in `schema_migrations`, so each file
+runs at most once, in **every** environment. (`migrations/` is additionally mounted at
+`docker-entrypoint-initdb.d` for the container's own first boot.)
 
 ### 2. Create Python Environment
 
@@ -72,6 +86,9 @@ curl http://localhost:8000/health
 
 # Expected response:
 # {"status":"healthy","db":"connected","version":"2.0.0"}
+#
+# With the database down this returns HTTP 503 and {"status":"unhealthy",...},
+# so `curl -f` / an uptime check will correctly fail.
 ```
 
 ---
@@ -102,7 +119,7 @@ curl http://localhost:8000/health
 
 ### `GET /health`
 
-Health check endpoint.
+Health check endpoint. Acquires a pooled connection and runs `SELECT 1`.
 
 **Response 200:**
 ```json
@@ -112,6 +129,20 @@ Health check endpoint.
   "version": "2.0.0"
 }
 ```
+
+**Response 503** (database unreachable):
+```json
+{
+  "status": "unhealthy",
+  "db": "disconnected",
+  "version": "2.0.0",
+  "error": "..."
+}
+```
+
+> This used to return **200** with the `unhealthy` body, so a status-code-only uptime check
+> reported green against a dead database. It is now a real 503; the body shape is unchanged.
+> The compose healthcheck depends on this.
 
 ---
 
@@ -245,6 +276,10 @@ Single camera frame upload (multipart).
 - Binary JPEG data
 - Maximum size: 10 MB
 - Must have valid JPEG magic bytes (FF D8 FF)
+- **Metadata is stripped before the JPEG is stored** (Phase 2.6). EXIF/XMP (including any GPS
+  IFD), maker notes, IPTC and comments are removed losslessly — the scan data is copied byte for
+  byte, so the stored image is pixel-identical. The colour-relevant segments (JFIF, ICC, Adobe)
+  are kept. Uploads are unaffected: send whatever the camera produced.
 
 **Metadata Field Validation:**
 
@@ -293,7 +328,16 @@ The schema uses **generic asset naming** (per enterprise-architecture-plan.md §
 | `fusion_run` | Fusion engine execution audit trail |
 | `fusion_pair` | Observation↔frame pairing with fused confidence |
 | `asset_type_registry` | Lookup: asset_type → metadata |
-| `device_rate_limit` | Persistent rate tracking (future) |
+| `device_rate_limit` | Persistent rate tracking (**unused** — the live limiter is in-memory per worker) |
+| `sensor_model` | Versioned ported-MATLAB classifier; one active row (Phase 2.1) |
+| `org` / `staff_user` / `org_member` / `refresh_token` | City-staff auth tier (Phase 2.4) |
+| `repair_log` | Audit trail for cluster repair/reopen (Phase 2.5) |
+| `model_disagreement` | device↔server probability gap, for Phase 3 review (Phase 2.3) |
+| `schema_migrations` | Migration ledger — filename, checksum, applied_at (Phase 2.6) |
+
+`asset_cluster.org_id` (Phase 2.6, `migrations/009`) is the owning municipality, or `NULL` for
+unowned. It scopes **repair writes** only; reads remain global. See
+[`docs/phase-2.6-hardening.md`](./docs/phase-2.6-hardening.md) §6.
 
 All geometry columns use `GEOGRAPHY(POINT, 4326)` with GIST indexes for spatial queries.
 

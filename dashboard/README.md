@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-18
+updated: 2026-08-23
 ---
 
 # RoadWatch — operator dashboard
@@ -210,6 +210,16 @@ The two roles genuinely differ, and not just in the UI: a `viewer` token reads
 against the running server. The dashboard also hides the repair control, but that is a hint, not
 the enforcement; the server re-reads `org_member` on every write.
 
+> **Since Phase 2.6 a repair can 403 for a second, unrelated reason: ownership.**
+> `asset_cluster.org_id` scopes writes — another org's cluster is refused even for an `admin`,
+> and an **unowned** cluster (`org_id IS NULL`) takes an `admin`. Because the clustering job
+> sets no `org_id`, *everything the pipeline produces is unowned*, so a plain `staff` operator
+> currently cannot mark real detections repaired. Provision operators who need to as `admin`
+> until the job learns to assign an owner. Full reasoning:
+> [`../docs/phase-2.6-hardening.md`](../docs/phase-2.6-hardening.md) §6.
+>
+> So when debugging a 403 on repair, check the cluster's `org_id` before assuming it is the role.
+
 These are **throwaway local-only credentials for a database that every test run wipes**. They
 are written down because the alternative is re-deriving them each time, and because
 `@example.com` cannot receive mail and `pothole_test` holds nothing real. Do not reuse these
@@ -234,6 +244,19 @@ collected drive data. These were provisioned during earlier phases:
 | `ops@example.com` | `admin` | `org_test` | **not recoverable** | yes |
 | `viewer@example.com` | `viewer` | `org_test` | **not recoverable** | yes |
 | `ops@test.local` | `admin` | `org_test` | **not recoverable** | **no — see below** |
+| `demo@roadwatch.dev` | `admin` | `org_test` | `roadwatch-demo` | yes |
+
+> `demo@roadwatch.dev` was provisioned against `pothole_db` on 2026-08-23 to demo the console,
+> because none of the passwords above are recoverable. That is **against the advice two sections
+> up** ("do not provision these accounts against `pothole_db`"), and it is recorded here rather
+> than left as an undocumented account with a published password. It is `admin` because
+> unowned clusters are admin-only to repair (see the Phase 2.6 note above). Remove it with:
+>
+> ```bash
+> docker compose exec -T postgres psql -U pothole -d pothole_db >   -c "DELETE FROM staff_user WHERE email = 'demo@roadwatch.dev';"
+> ```
+>
+> `org_member` and `refresh_token` cascade from `staff_user`.
 
 **The passwords cannot be documented, because they cannot be read.** `staff_user.password_hash`
 is bcrypt, which is one-way by design — that is the property that makes the column safe to hold.
