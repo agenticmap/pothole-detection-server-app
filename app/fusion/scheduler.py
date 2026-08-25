@@ -22,6 +22,50 @@ logger = logging.getLogger(__name__)
 _scheduler: AsyncIOScheduler | None = None
 
 
+def _detector_loads() -> bool:
+    """Check the configured detector can actually be built, once, at startup.
+
+    Without this, a missing or unreadable DETECTION_MODEL_PATH surfaces as an
+    exception from inside the scheduled job — every two minutes, forever, with
+    nothing marking the service unhealthy and no detection probe in /health. The
+    same class of silent misconfiguration as the container that "booted clean and
+    served nothing" in Phase 2.6 §5.
+
+    The detector is constructed and discarded: run_detection_job builds its own per
+    run, which is load-bearing for the hybrid backend's per-run VLM call cap.
+
+    Returns False rather than raising. A model that will not load is a degraded
+    background job, not a reason to take ingestion down with it — but it is logged
+    at ERROR with the consequence spelled out, because frames accumulating unscored
+    looks exactly like frames being scored as negative.
+    """
+    from app.detection.registry import get_detector
+
+    try:
+        detector = get_detector()
+    except Exception as e:  # noqa: BLE001 — any construction failure is the same story
+        logger.error(
+            "DETECTION_ENABLED is true but the %r backend could not be built: %s. "
+            "The detection job will NOT run: frames stay unscored (detected_at NULL) and "
+            "fusion falls back to device_probability. Fix the configuration and restart.",
+            settings.detection_backend, e,
+        )
+        return False
+
+    if detector is None:
+        logger.error(
+            "DETECTION_ENABLED is true but DETECTION_BACKEND is %r, so there is nothing "
+            "to run. Set it to onnx, http or hybrid, or set DETECTION_ENABLED=false.",
+            settings.detection_backend,
+        )
+        return False
+
+    logger.info(
+        "Detection backend %r ready (%s).", settings.detection_backend, detector.version
+    )
+    return True
+
+
 def start_scheduler(pool: asyncpg.Pool) -> None:
     """Create and start the scheduler with the fit and fusion jobs (if enabled)."""
     global _scheduler
@@ -71,7 +115,7 @@ def start_scheduler(pool: asyncpg.Pool) -> None:
             misfire_grace_time=120,
         )
 
-    if settings.detection_enabled:
+    if settings.detection_enabled and _detector_loads():
         scheduler.add_job(
             run_detection_job,
             trigger=IntervalTrigger(minutes=settings.detection_interval_minutes),

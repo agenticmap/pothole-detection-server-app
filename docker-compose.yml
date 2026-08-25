@@ -43,6 +43,12 @@ services:
       # mounted rather than baked in: it is a build artefact outside git, and a
       # different pilot city means a different archive with the same image.
       - ./storage/basemap:/opt/server/storage/basemap:ro
+      # Detector weights (Phase 2.7). Same reasoning as the basemap: a .onnx export
+      # is a build artefact, gitignored, and swapped per model version without
+      # rebuilding. The Dockerfile copies only app/ and migrations/, so WITHOUT this
+      # mount DETECTION_BACKEND=onnx cannot find a model — start_scheduler logs one
+      # ERROR and skips the job rather than throwing every two minutes.
+      - ./models:/opt/server/models:ro
     healthcheck:
       # No curl in python:3.12-slim, so use the interpreter that is already here.
       # urlopen raises on a non-2xx status, so a 503 from /health fails the check.

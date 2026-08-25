@@ -347,7 +347,7 @@ This roadmap **extends** [`docs/roadmap.md`](./roadmap.md); it does not replace 
 | **P2.0 — Schema freeze + ingestion server** | This doc §4.2; refines `roadmap.md` §2.1–§2.2, §2.6 | Server | ✅ Shipped | 2–3 weeks |
 | **P2.1 — Fusion engine v1 (MATLAB port)** | This doc §4.3 (new) | Server / ML | ✅ Shipped — `phase-2.1-fusion-engine-plan.md` | 2–3 weeks |
 | **P2.2 — Clustering + read API** | This doc §4.4; refines `roadmap.md` §2.5–§2.6 | Server | ✅ Shipped — `phase-2.2-clustering-plan.md`, `phase-2.2b-read-path-plan.md` | 1–2 weeks |
-| **P2.3 — Server-side detection model** | `roadmap.md` §2.3 | Server / ML | ✅ Shipped (gated off) — `phase-2.3-detection-plan.md` | — |
+| **P2.3 — Server-side detection model** | `roadmap.md` §2.3 | Server / ML | ✅ Shipped (gated off) — `phase-2.3-detection-plan.md`; enablement path (eval, ground-truth labels, backfill, ROI crop) built in `phase-2.7-detection-enablement.md`, still awaiting a model artifact | — |
 | **P2.4 — City-staff auth tier** | `phase-2.4-auth-plan.md` | Server | ✅ Shipped | — |
 | **P2.5 — Operator dashboard MVP** | This doc §4.5 (was "P2.3") | Web + Server | ✅ Shipped — `phase-2.5-dashboard-plan.md` | 3–4 weeks |
 | **P2.6 — Production hardening** | `phase-2.6-hardening.md`; refines `roadmap.md` §2.8–2.10 + `road-test-readiness.md` "Known gaps" | Server / Ops | 🟡 In progress — startup-path fixes, container deployment and the Phase 2.5 security leftovers landed; §2.8 abuse/throughput work outstanding | — |

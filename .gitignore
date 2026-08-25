@@ -47,3 +47,16 @@ node_modules/
 # they are inputs to model training, not source. The MATLAB research code in
 # files/MatlabCode/ stays tracked.
 files/*.zip
+
+# Model artifacts and training scratch (Phase 2.7). The server loads an ONNX export
+# from models/ via DETECTION_MODEL_PATH; it is a build output, not source, and .onnx
+# weights are tens of MB. Ultralytics writes checkpoints and plots to runs/.
+# Extract the files/*.zip datasets OUTSIDE this repo -- the ignore above covers the
+# archives, not the ~10,700 files they unpack into.
+models/*
+!models/README.md
+runs/
+*.onnx
+*.pt
+.venv-train/
+*.docx

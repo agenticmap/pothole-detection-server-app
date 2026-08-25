@@ -1,6 +1,12 @@
 # Phase 2.3 — Server-side detection model (As-Built)
 
 > Status: **Implemented** (code + tests; ships gated off until a model is supplied).
+> **Phase 2.7 built the enablement path around this** — offline evaluation, ground-truth
+> labels, a backfill, an ROI crop for the real portrait frames, and the first tests that
+> actually execute `onnx_v1.py`. See
+> [`phase-2.7-detection-enablement.md`](./phase-2.7-detection-enablement.md). Two claims
+> below are corrected there: `server_detections` now uses the device's box shape, and
+> "re-fusing frames detected after they were already paired" is done.
 > Companion to [`docs/roadmap.md`](./roadmap.md) §2.3 and follows
 > [`docs/phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md).
 > For *why* server detection is a YOLO → VLM hybrid (the decision + research), see
@@ -76,12 +82,18 @@ You supply the model (see `docs/model-attribution.md`).
   idempotent re-run; inference-error still marks `detected_at`; `backend=none` is a no-op.
 - `tests/test_fusion_db.py`: a frame with `server_probability` fuses higher than a device-only frame.
 - Manual (real model): drop a `.onnx`, set `DETECTION_ENABLED/BACKEND/MODEL_PATH`, POST a frame,
-  confirm `server_*` populated and fusion uses it.
+  confirm `server_*` populated and fusion uses it. **Phase 2.7 replaced most of this with
+  scripts**: `scripts/detect_eval.py` scores stored frames without writing anything, and
+  `tests/test_onnx_detector.py` verifies the decode arithmetic with no model at all.
 
 ## Out of scope / fast-follow
 - GPU autoscaling / batched inference / retry queues for the HTTP backend.
 - Surfacing `model_disagreement` for review (Phase-3 flywheel, §3.1–3.3).
-- Re-fusing frames detected after they were already paired.
+- ~~Re-fusing frames detected after they were already paired.~~ **Done in Phase 2.7.**
+  fusion selects `WHERE processed_at IS NULL` and `_UPSERT_PAIR_SQL` upserts on
+  `(event_client_id, frame_client_id)`, so clearing `processed_at` re-scores in place with
+  no duplicates. `scripts/backfill_detection.py --reset-fusion` does it, pinned by
+  `test_detection_backfill_can_rescore_existing_pairs`.
 
 ## Phase 2.3b — Hybrid detector (YOLO Stage 1 + VLM verifier)
 

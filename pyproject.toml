@@ -20,6 +20,11 @@ dependencies = [
     "scipy>=1.15.0",
     "scikit-learn>=1.6.0",
     "joblib>=1.4.0",
+    # Server-side detection (Phase 2.3). Lazy-imported by app/detection/onnx_v1.py,
+    # but they must be declared: without them `pip install -e .` cannot run
+    # DETECTION_BACKEND=onnx at all. Kept in sync with requirements.txt.
+    "onnxruntime>=1.20.0",
+    "Pillow>=11.1.0",
     "PyJWT[crypto]>=2.10.0",
     "bcrypt>=4.2.0",
 ]

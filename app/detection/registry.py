@@ -20,6 +20,10 @@ def _build_detector(backend: str) -> FrameDetector | None:
             model_id=settings.detection_model_id,
             input_size=settings.detection_input_size,
             conf_threshold=settings.detection_conf_threshold,
+            iou_threshold=settings.detection_iou_threshold,
+            roi_enabled=settings.detection_roi_enabled,
+            roi_top=settings.detection_roi_top,
+            roi_bottom=settings.detection_roi_bottom,
         )
     if backend == "http":
         from app.detection.http_v1 import HttpDetector
@@ -27,6 +31,7 @@ def _build_detector(backend: str) -> FrameDetector | None:
         return HttpDetector(
             url=settings.detection_http_url,
             model_id=settings.detection_model_id,
+            timeout=settings.detection_http_timeout,
         )
     return None
 

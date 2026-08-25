@@ -63,9 +63,14 @@ an **Isolation Forest** outlier gate, and an **IRI-style severity** output was a
   ratio) used until a model is active.
 - `registry.py` — `get_engine(model)`: primary when a model is active, else fallback.
 - `service.py` — `run_fit_job()` (gated on accumulated observations) and `run_fusion_job()`
-  (score unscored observations → pair unprocessed frames with the nearest same-device observation via
-  `ST_DWithin` + `ROW_NUMBER` → fuse → upsert `fusion_pair` + write `fusion_run` → mark frames
-  processed). Advisory-locked; pairing wrapped in one transaction.
+  (score unscored observations → pair unprocessed frames with the **best-matching** same-device
+  observation via `ST_DWithin` + `ROW_NUMBER` → fuse → upsert `fusion_pair` + write `fusion_run` →
+  mark frames processed). Advisory-locked; pairing wrapped in one transaction.
+  **Phase 2.2d changed "best" from "nearest in time" to "lowest lookahead cost"** — the camera
+  resolves a pothole while it is still ahead of the car, so the nearest-in-time frame is the one
+  taken on top of the defect, where it cannot be seen. Same job, same transaction, different ranking
+  and a speed-derived temporal window; see
+  [`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md).
 - `scheduler.py` — `AsyncIOScheduler` with the fit + fusion jobs (`max_instances=1`, `coalesce`),
   started/stopped from the app lifespan, gated by `FUSION_ENABLED` / `SENSOR_FIT_ENABLED`.
 
@@ -106,7 +111,15 @@ mutate the cached `settings` object.
 
 ## Open items (non-blocking)
 1. Confirm the component→class energy rule on the first real fit; expose a config override.
-2. Tune `sensor_fit_min_observations`, `sensor_fit_k_max`, `sensor_iforest_contamination` on pilot data.
+2. Tune `sensor_fit_min_observations`, `sensor_fit_k_max` on pilot data.
+   `sensor_iforest_contamination` is **measured and answered** — see the outlier-gate section of
+   [`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md). Tuning it cannot work: below
+   contamination 0.05 the gate flags nothing but potholes (it removed 139 of 140), so the dial runs
+   between "no gate at all" and "no potholes at all". The cause is that `OUTLIER_FEATURES` includes
+   `ratio`, `gbar` and `magnitude`, on which potholes separate from everything else by 14-15x. A
+   class-neutral set — `(accel_std, speed_mps)`, which carry no class signal — keeps 122 of 140 at
+   the unchanged 0.1 and flags roughly uniformly across classes. Not applied: it needs a re-fit and a
+   re-score, and it changes what every existing `sensor_is_outlier` means.
 3. Whether `crack` folds into `pothole` for `sensor_confidence` downstream.
 4. Severity: revisit the fuller double-integration IRI from the raw `[180,10]` window once validated.
 5. `model_blob`: inline `bytea` (current) vs. object-storage ref at scale.

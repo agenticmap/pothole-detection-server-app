@@ -91,7 +91,10 @@ fused-pair-only membership.
 - `cluster_eps_m` / `cluster_min_points` — tune on pilot data (25 m / 3 from roadmap).
   The Mercator eps correction uses the dataset mean latitude; for very wide-area data a
   per-point/UTM projection would be more exact.
-- `confidence` aggregate is the member mean — revisit vs. max.
+- ~~`confidence` aggregate is the member mean — revisit vs. max.~~ **Done in Phase 2.2c**
+  ([`phase-2.2c-spatiotemporal-fusion.md`](./phase-2.2c-spatiotemporal-fusion.md)): it is now
+  a spatiotemporally weighted combination of the members' class distributions, so a recent
+  detection on the centroid outweighs a stale one 20 m out. Neither mean nor max.
 - Whether `crack`-classed observations should also be eligible members (currently no).
 - Stale clusters whose members all age out of the window are left in place (not
   deleted); the read path should filter by `last_seen`/`since`.

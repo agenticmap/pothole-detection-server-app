@@ -50,7 +50,20 @@ async def test_detection_writes_server_fields(db_pool):
         await insert_frame(conn, "f1", device_id="detdev", device_probability=0.8, jpeg_url=url)
 
     n = await run_detection_job(
-        db_pool, StubDetector(0.85, detections=[{"conf": 0.85, "xywh": [1, 2, 3, 4]}])
+        db_pool,
+        StubDetector(
+            0.85,
+            # The real shape both detectors emit (see app/detection/onnx_v1.py):
+            # normalized corner-origin bbox, matching device_detections.
+            detections=[
+                {
+                    "bbox": {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4},
+                    "label": "pothole",
+                    "class_id": 0,
+                    "confidence": 0.85,
+                }
+            ],
+        ),
     )
     assert n == 1
 
@@ -64,7 +77,9 @@ async def test_detection_writes_server_fields(db_pool):
     assert abs(row["server_probability"] - 0.85) < 1e-9
     assert row["server_model_id"] == "stub_v1"
     assert row["detected_at"] is not None
-    assert json.loads(row["server_detections"])[0]["conf"] == 0.85
+    stored = json.loads(row["server_detections"])[0]
+    assert stored["confidence"] == 0.85
+    assert stored["bbox"] == {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}
     assert disagreements == 0  # |0.8 - 0.85| < 0.3
 
 

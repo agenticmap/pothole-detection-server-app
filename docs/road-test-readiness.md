@@ -151,7 +151,16 @@ a new `LOG_LEVEL` setting (default INFO).
   503 (body shape unchanged), so uptime checks and the compose healthcheck can see a dead DB.
 - **Server-side detection is off** (`detection_enabled = False`). Fusion falls back to the device
   probability via `COALESCE(server_probability, device_probability)`, so the loop works without
-  it. Not required for a first drive.
+  it. Not required for a first drive. **Still true after Phase 2.7** — that phase built the
+  enablement path (offline eval, ground-truth labels, backfill, ROI crop) but there is still no
+  `.onnx` on disk, so the flag stays off. What did change: enabling it with a bad
+  `DETECTION_MODEL_PATH` now logs one ERROR at startup and skips the job, instead of throwing
+  every two minutes. See
+  [`phase-2.7-detection-enablement.md`](./phase-2.7-detection-enablement.md).
+- **The on-device probability should not be trusted on collected frames.** Measured over the
+  2916 frames already collected: median 0.118, and the three top-scoring frames contain no
+  pothole (a manhole cover, a crosswalk marking, and rain on the windshield at night). Judge a
+  drive by the sensor path until a server model is in place.
 - **Auth uses an ephemeral RS256 keypair in dev** — irrelevant to anonymous ingestion and the
   public read path.
 - **`docker-compose.yml` maps host `5433`**, not 5432. The compose service is named `postgres`

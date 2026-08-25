@@ -51,10 +51,65 @@ class Settings(BaseSettings):
     fusion_engine_version: str = "fusion.matlab_port_v1"
     fusion_interval_minutes: int = 5
     fusion_batch_size: int = 500
-    fusion_window_ms: int = 3000          # |T_frame - T_event| pairing window
-    fusion_window_m: float = 25.0         # spatial pairing window (meters)
     fusion_w_s: float = 0.5               # sensor weight in sigmoid fusion
     fusion_w_v: float = 0.5               # visual weight in sigmoid fusion
+
+    # ── Pairing search (Phase 2.2d) ─────────────────────────────────────────────
+    # The camera sees a pothole while it is still AHEAD of the vehicle; the
+    # accelerometer fires when the wheel arrives. So a correct pair has a non-zero
+    # separation (the lead) and a NEGATIVE delta_ms (frame before event) — not the
+    # delta=0/dist=0 that the pre-2.2d ranking preferred. Re-ranking the existing
+    # candidates in pothole_db changed the winner for 713 of 2197 frames (32.5%).
+    # See docs/phase-2.2d-pairing-search.md.
+    # false restores the pre-2.2d RANKING, not the pre-2.2d windows: it still uses
+    # fusion_window_m and a fixed fusion_window_ms_max, because fusion_window_ms no
+    # longer exists. For a byte-exact revert also set FUSION_WINDOW_M=25 and
+    # FUSION_WINDOW_MS_MAX=3000, which were the old defaults.
+    fusion_pairing_cost_enabled: bool = True
+    # Ground-distance band the camera can usefully resolve a pothole in. A property
+    # of the lens and the mount pitch, so THESE DEFAULTS ARE A HYPOTHESIS, NOT A
+    # FINDING — only 3 potholes in pothole_db have a paired frame, far too few to
+    # fit a band from. `scripts/pairing_eval.py --fit-lead` replaces them once
+    # Phase 2.7's frame labels exist.
+    fusion_lead_near_m: float = 5.0
+    fusion_lead_far_m: float = 30.0
+    # Divisor floor when converting a lead distance to an expected time offset, so
+    # a stopped or speed-less observation does not blow up the kinematic term.
+    fusion_speed_floor_mps: float = 5.0
+    # Spatial window. Must span the lead band plus GPS error, or the search cannot
+    # reach the frames that actually saw the pothole. Raised 25 → 40 in 2.2d: 25 m
+    # reached 1842 frames, 40 m reaches 2197 (+19.3%).
+    fusion_window_m: float = 40.0
+    # Temporal window is DERIVED from speed — the two gates are one constraint, not
+    # two. At 13.02 m/s (the measured median) 3000 ms of travel is 39 m, and 75 m at
+    # p90, so the old fixed 3000 ms contradicted the 25 m spatial gate: above
+    # ~8.3 m/s the spatial gate bound and the temporal one was dead weight. This is
+    # now only the CEILING, for the low-speed case where the derived window opens up.
+    fusion_window_ms_max: int = 8000
+    # Cost weights. lead_penalty is in metres outside the band, kinematic in seconds
+    # of residual, so the two are commensurate only by choice of these weights.
+    fusion_w_lead: float = 1.0
+    fusion_w_kinematic: float = 1.0
+    # Added to a candidate whose frame was taken AFTER the event fired. Such a frame
+    # is looking at road the car has already crossed, so it is admissible (GPS and
+    # clock noise straddle zero) but should lose to any backward candidate.
+    fusion_forward_penalty: float = 2.0
+    # Frames are marked processed whether or not they paired, so an event that
+    # uploads after its frame is a permanently missed pair. Observations lag frames
+    # (median upload lag 3.2 h vs 1.7 h) and 450 candidate pairs in pothole_db have
+    # the event arriving later — though 0 frames were actually lost, because the
+    # 5-minute cadence absorbed it. This bounds the exposure regardless.
+    fusion_retry_grace_minutes: int = 30
+
+    # Frame-only cluster members: a frame that sees a pothole nobody drove over.
+    # 98.6% of pothole observations have no coincident frame, so this is the largest
+    # recall ceiling in the pipeline — and it CANNOT BE HONESTLY ENABLED YET.
+    # server_probability is NULL on all 2916 frames (no model), leaving only the
+    # on-device probability, whose confidence floor was lowered to ~5% mid-collection
+    # (p50 0.118). Turning this on today would flood clustering with on-device
+    # guesses. The gate opens once Phase 2.7 measures a threshold.
+    fusion_frame_only_enabled: bool = False
+    fusion_frame_only_min_probability: float = 0.5
 
     # ── Sensor model (unsupervised classifier, ported from MATLAB) ──────────────
     sensor_fit_enabled: bool = True
@@ -83,6 +138,31 @@ class Settings(BaseSettings):
     cluster_window_days: int = 30                  # only members seen in last N days
     cluster_member_min_confidence: float = 0.5     # fused_confidence floor for pair members
     cluster_min_distinct_devices: int = 2          # below this → not public (read-path filter)
+
+    # ── Spatiotemporal crowd fusion (Phase 2.2c) ────────────────────────────────
+    # The integration half of Sattar's probabilistic crowdsourcing technique: cluster
+    # confidence becomes a spatiotemporally weighted combination of its members'
+    # class distributions instead of a plain mean, so a detection on the centroid
+    # detected today outweighs one 20 m away from three weeks ago.
+    # Falls back to the legacy mean per-cluster when members predate the
+    # sensor_class_probs column, so it is safe to enable on un-rescored data.
+    cluster_spatiotemporal_enabled: bool = True
+    # RBF sigma floors. gamma = 1/(2*sigma^2) and sigma comes from the cluster's own
+    # spread, so a cluster whose members sit at near-identical distances or times
+    # would otherwise divide by zero. Also covers the single-member case.
+    cluster_rbf_sigma_floor_m: float = 1.0
+    cluster_rbf_sigma_floor_seconds: float = 3600.0
+    # Symmetric Dirichlet prior, an extension BEYOND the paper. 0.0 reproduces its
+    # result exactly. Above zero, small clusters are shrunk toward uniform and only
+    # approach their observed value as corroborating members accumulate — i.e. it is
+    # what makes three agreeing devices outrank one.
+    cluster_prior_concentration: float = 0.0
+    # Cluster identity (paper §4.4). A new group only merges into an existing cluster
+    # when their headings agree, so opposing carriageways stay separate defects.
+    # Android's bearing accuracy is not on the wire yet, so this is a fixed tolerance
+    # rather than the paper's ±2σ; see docs/app-capture-findings.md F3.
+    cluster_bearing_tolerance_deg: float = 45.0
+    cluster_bearing_aware: bool = True
 
     # ── Operator dashboard frontend (Phase 2.5) ─────────────────────────────────
     # Built bundle, mounted at /dashboard when present. Relative paths resolve
@@ -120,7 +200,18 @@ class Settings(BaseSettings):
     detection_http_url: str = ""                   # external inference endpoint (backend=http)
     detection_input_size: int = 640
     detection_conf_threshold: float = 0.25
+    detection_iou_threshold: float = 0.45          # NMS overlap ceiling (backend=onnx)
     detection_disagreement_threshold: float = 0.3  # |device − server| above this → logged
+    detection_http_timeout: float = 30.0           # per-frame timeout (backend=http)
+
+    # ROI crop (Phase 2.7). Uploaded frames are 480x640 portrait windshield shots:
+    # sky and trees fill the top half and the hood the bottom ~15%, so letterboxing
+    # the whole frame spends most of the 640px budget where a pothole cannot be.
+    # Fractions of frame HEIGHT; full width is always kept. Boxes come back in
+    # full-frame coordinates either way, so this is safe to flip.
+    detection_roi_enabled: bool = True
+    detection_roi_top: float = 0.45                # below the horizon
+    detection_roi_bottom: float = 0.90             # above the hood
 
     # ── Hybrid detector (Phase 2.3b — YOLO Stage 1 + VLM verifier) ──────────────
     # backend="hybrid" runs a Stage-1 detector (onnx/http) and, only for frames

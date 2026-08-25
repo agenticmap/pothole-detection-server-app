@@ -6,6 +6,8 @@ per-run call cap, crop on/off, and graceful VLM failure. parse_verdict is tested
 against fenced / prose-wrapped / malformed replies.
 """
 
+import io
+
 import pytest
 
 from app.detection.engine import DetectionResult
@@ -128,7 +130,7 @@ def test_no_verifier_passes_through():
 
 def test_crop_disabled_sends_full_frame():
     v = StubVlmVerifier(VlmVerdict(True, 0.8, "shallow", "yes", "stub"))
-    det = _hybrid(StubStage1Detector(0.5, detections=[{"xywh": [1, 1, 1, 1]}]), v, crop=False)
+    det = _hybrid(StubStage1Detector(0.5, detections=[_box(0.1, 0.1, 0.2, 0.2)]), v, crop=False)
     det.detect(JPEG)
     assert v.last_image == JPEG  # untouched bytes
 
@@ -170,3 +172,105 @@ def test_parse_negative_forces_severity_none():
 def test_parse_raises_on_no_json():
     with pytest.raises(ValueError):
         parse_verdict("I cannot help with that.", "m")
+
+
+# ── _crop (Phase 2.7) ─────────────────────────────────────────────────────────
+#
+# This path had zero coverage: every test above sets crop=False so Pillow isn't
+# needed. It matters now for two reasons — the box shape changed to match the
+# device's normalized corner-origin form, and the VLM step that follows relies on
+# the crop being right, since a wrong crop sends the verifier a picture of the
+# wrong part of the road and the verdict looks plausible either way.
+
+
+def _box(x, y, w, h, conf=0.5):
+    """A detection in the shape onnx_v1 emits: normalized, corner-origin."""
+    return {
+        "bbox": {"x": x, "y": y, "w": w, "h": h},
+        "label": "pothole",
+        "class_id": 0,
+        "confidence": conf,
+    }
+
+
+def _jpeg(width=200, height=100):
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), (120, 120, 120)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+def _size(jpeg_bytes):
+    from PIL import Image
+
+    return Image.open(io.BytesIO(jpeg_bytes)).size
+
+
+def _crop_via_detect(detections, *, crop_margin=0.0, image=None):
+    """Drive _crop through detect() so the gray-zone gate is exercised too."""
+    image = image or _jpeg()
+    verifier = StubVlmVerifier(VlmVerdict(True, 0.9, "high", "r", "m"))
+    det = _hybrid(
+        StubStage1Detector(0.5, detections=detections),
+        verifier,
+        crop=True,
+        crop_margin=crop_margin,
+    )
+    det.detect(image)
+    assert verifier.calls == 1
+    return verifier.last_image
+
+
+def test_crop_takes_the_union_of_every_box():
+    # 200x100 image. Box A → px (20,20)-(60,50); box B → px (100,60)-(120,80).
+    # Union is (20,20)-(120,80), i.e. 100x60. Neither box alone gives that.
+    cropped = _crop_via_detect([_box(0.1, 0.2, 0.2, 0.3), _box(0.5, 0.6, 0.1, 0.2)])
+    assert _size(cropped) == (100, 60)
+
+
+def test_crop_applies_the_margin_on_all_four_sides():
+    # Same union (100x60). margin=0.2 → 20px horizontally, 12px vertically, so the
+    # box becomes (0,8)-(140,92): clamped at x=0, not negative.
+    cropped = _crop_via_detect(
+        [_box(0.1, 0.2, 0.2, 0.3), _box(0.5, 0.6, 0.1, 0.2)], crop_margin=0.2
+    )
+    assert _size(cropped) == (140, 84)
+
+
+def test_crop_clamps_to_the_frame():
+    """A box running off the right edge must not produce a crop wider than the frame."""
+    cropped = _crop_via_detect([_box(0.9, 0.9, 0.2, 0.2)], crop_margin=0.5)
+    w, h = _size(cropped)
+    assert w <= 200 and h <= 100
+
+
+def test_crop_is_scale_free_so_it_survives_an_roi_crop():
+    """Normalized boxes mean the same detections crop proportionally on any size.
+
+    onnx_v1 may letterbox an ROI-cropped region but always reports full-frame
+    normalized coords, so _crop must not assume any particular pixel size.
+    """
+    boxes = [_box(0.25, 0.25, 0.5, 0.5)]
+    small = _size(_crop_via_detect(boxes, image=_jpeg(200, 100)))
+    large = _size(_crop_via_detect(boxes, image=_jpeg(400, 200)))
+    assert small == (100, 50)
+    assert large == (200, 100)
+
+
+def test_no_boxes_sends_the_full_frame():
+    image = _jpeg()
+    assert _crop_via_detect([], image=image) == image
+
+
+def test_entries_without_a_bbox_are_skipped():
+    """A _vlm_verdict entry rides in the same list and has no bbox — it must not crash."""
+    image = _jpeg()
+    detections = [{"_vlm_verdict": {"is_pothole": True}}, "not-a-dict"]
+    assert _crop_via_detect(detections, image=image) == image
+
+
+def test_a_degenerate_box_sends_the_full_frame():
+    """Zero-area box → the crop rectangle collapses; sending the whole frame is valid."""
+    image = _jpeg()
+    assert _crop_via_detect([_box(0.5, 0.5, 0.0, 0.0)], image=image) == image

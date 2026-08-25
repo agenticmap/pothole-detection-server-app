@@ -8,7 +8,7 @@ joblib blob (replaces the Hotelling-T² test in ClusterFinding.m/CheckIfClustere
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.stats import multivariate_normal
@@ -23,6 +23,11 @@ class ScoreResult:
     p_pothole: float
     severity: float
     is_outlier: bool
+    # The whole posterior, not just its pothole component. Computed anyway by
+    # _class_posteriors; Phase 2.2c's spatiotemporal integration needs the vector
+    # because it combines distributions across cluster members, not scalars.
+    # Empty when the posterior was degenerate (see the not-a-pothole branch below).
+    class_probs: dict[str, float] = field(default_factory=dict)
 
 
 def _class_posteriors(model: SensorModel, z: list[float]) -> dict[str, float]:
@@ -88,4 +93,5 @@ def score_observation(
         p_pothole=p_pothole,
         severity=severity,
         is_outlier=is_outlier,
+        class_probs=posteriors,
     )

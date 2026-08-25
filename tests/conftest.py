@@ -56,7 +56,7 @@ async def db_pool():
         await conn.execute(
             "TRUNCATE repair_log, refresh_token, org_member, staff_user, org, "
             "observation_cluster_link, asset_cluster, cluster_run, "
-            "model_disagreement, fusion_pair, fusion_run, sensor_model, "
+            "model_disagreement, frame_label, fusion_pair, fusion_run, sensor_model, "
             "asset_frame, asset_observation RESTART IDENTITY CASCADE"
         )
     try:

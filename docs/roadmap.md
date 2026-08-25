@@ -46,6 +46,10 @@ This document tracks the full multi-phase plan for the app. Shipped phases get a
 | 2.5 | ✅ Shipped | Operator dashboard: vector tiles, detail panel, repair marking, and the browser console (`dashboard/`). |
 | 2.5b/c | ✅ Shipped | Dashboard design pass: Organic skin, self-hosted Protomaps vector basemap, KPI/filter dock + `/clusters/stats`, severity recalibrated to the real [0,1] scale, and a synthetic demo seed. Fixed a MapLibre worker 404 that had meant **no vector tile ever loaded**. |
 | 2.6 | 🟡 In progress | Production hardening: public-read 500 fix, real `/health` 503, fit-job advisory lock, `schema_migrations` ledger, containerised dashboard/basemap, org-scoped repair writes, EXIF stripped on ingest, `POST /auth/logout`. See [`phase-2.6-hardening.md`](./phase-2.6-hardening.md). |
+| 2.7 | 🟡 Blocked on a model | Server-side detection enablement: the first tests that run `onnx_v1.py`, a raw-export layout guard, an ROI crop for the real portrait frames (1.78x more road pixels), `server_detections` reshaped to match the device's, `frame_label` ground truth + a labelling tool, offline evaluation, a backfill that also re-fuses stale pairs, and a `to_thread` fix for a ~60 s API stall per tick. No `.onnx` exists yet, so detection is still off. See [`phase-2.7-detection-enablement.md`](./phase-2.7-detection-enablement.md). |
+| 2.2c | ✅ Shipped | Spatiotemporal crowd fusion, implementing §4.4–4.5 of the *Probabilistic-based crowdsourcing* paper: cluster confidence is a spatiotemporally weighted (Gaussian RBF over distance-to-centroid and age) combination of its members' class distributions rather than a mean, opposing carriageways stay separate defects, and the per-event class posterior is finally persisted. See [`phase-2.2c-spatiotemporal-fusion.md`](./phase-2.2c-spatiotemporal-fusion.md). |
+| 2.2d | ✅ Shipped | The pairing search. The old ranking's ideal match was a frame taken at the same instant and place as the wheel impact — geometrically backwards, since the camera resolves a pothole while it is still *ahead* of the car. Replaced with a lookahead cost (lead band + kinematic residual + a penalty for frames shot after the event), a temporal window derived from speed instead of contradicting the spatial one, `is_primary` so the member gate reads the best *view* rather than the loudest *verdict*, and a frame-only member arm built but shipped off. Re-fusing `pothole_db` moved mean separation 5.25 m → 15.29 m and mean Δt −93 ms → −537 ms. See [`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md) for the design and [`phase-2.2d-runbook.md`](./phase-2.2d-runbook.md) for the procedure. |
+| 2.8 | 📋 Recommended next | Capture quality + provenance. Analysing the first 2916 real frames found the limiting factor is the data, not the detector: wire timestamps were whole-second (so fusion's Δt had only **three** possible values inside its 3000 ms window), one GPS fix is reused across ~3 frames, 25% of every inference is black padding the app adds itself, 69% of frames came from one night hour at 72 km/h, and the session join key the app already records is never uploaded — so there is no coverage denominator and no source of training negatives. See [`app-capture-findings.md`](./app-capture-findings.md). |
 | 3 | 📋 Planned | On-device ML upgrade + labeled-data flywheel |
 | 4 | 📋 Planned | Production hardening + public release |
 
@@ -195,25 +199,45 @@ A bigger YOLO variant runs as a worker downstream of frame uploads.
 - **Model**: YOLOv8-small or -medium fine-tuned on the same dataset as the on-device model (consistency for fusion math).
 - **Hosting**: Supabase Edge Function calling out to a separate inference service (Modal / Replicate / a tiny Triton instance) — Edge Functions don't have GPUs.
 - **Pipeline**: poll `frame WHERE processed_at IS NULL`, download JPEG, optionally crop to the union of `device_detections` bboxes + 20% margin, run inference, write `server_*` columns.
-- **Disagreement logging**: `abs(device_probability - server_probability) > 0.3` → log to `model_disagreement` for Phase 3 review.
+- **Disagreement logging**: `abs(device_probability - server_probability) > 0.3` → log to
+  `model_disagreement` for Phase 3 review. *Built in Phase 2.3; the table is still empty,
+  necessarily, because no server model has ever scored a frame. Phase 2.7's backfill is what
+  finally populates it.*
 
 ### 2.4 Fusion job
 
 Cron every 5 minutes. Implements the contract from Phase 1.6:
 
-For every uploaded `frame` row with `ts T_f` and any nearby `event` row with `ts T_e` such that `|T_f − T_e| < 3000 ms` AND `haversine(loc_f, loc_e) < 25 m`:
+For every uploaded `frame` row with `ts T_f` and any nearby `event` row with `ts T_e`:
 
 ```
-fused_confidence = sigmoid(w_s · z(magnitude) + w_v · visual_confidence)
+fused_confidence = sigmoid(w_s · logit(p_sensor) + w_v · logit(p_visual))
 ```
 
 with `w_s = w_v = 0.5` to start; refined offline against labeled data.
+
+> **Superseded by Phase 2.2d.** The candidate gate is no longer a fixed `|Δt| < 3000 ms` AND
+> `dist < 25 m`: at the measured median 13.02 m/s those two contradict each other (3000 ms of travel
+> is 39 m), so the temporal window is now derived from speed as `window_m / speed`, bounded by
+> `FUSION_WINDOW_MS_MAX`, and `window_m` is 40 m. Nor is the winner the nearest candidate in time —
+> that preferred the frame taken on top of the pothole, which the camera cannot see. It is now the
+> lowest-cost candidate under a lookahead model. See
+> [`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md).
+>
+> Note also that §3.4 below specifies `w_s = w_v = 1.0` for the on-device version while the server
+> ships `0.5`. That is not a typo in one of the two: with weights summing to 1 the blend is a
+> weighted geometric opinion pool (agreement does not strengthen the result), and at 1.0 it is
+> log-odds accumulation (it does). Which is wanted has never been decided, and the server's 0.5 is
+> "to start", unrefined for want of labels.
 
 ### 2.5 Clustering job
 
 Cron every 15 minutes. PostGIS `ST_ClusterDBSCAN(geom, eps_meters := 25, minpoints := 3)` over the last 30 days of high-confidence members. Promotes to `pothole_cluster`:
 - `centroid` = weighted mean of member geoms by their `fused_confidence`
 - `severity` = median of contributing events' magnitudes
+- `confidence` — **as built, this is no longer a plain mean.** Phase 2.2c integrates the
+  members' class distributions with spatiotemporal RBF weighting, so recency and proximity
+  to the centroid matter. See [`phase-2.2c-spatiotemporal-fusion.md`](./phase-2.2c-spatiotemporal-fusion.md).
 - `distinct_devices` = `COUNT(DISTINCT device_id)`
 - Only clusters with `distinct_devices >= 2` are public (suppresses single-user noise)
 

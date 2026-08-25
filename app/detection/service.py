@@ -8,6 +8,7 @@ mirroring run_fusion_job / run_cluster_job in app/fusion/service.py.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -74,7 +75,11 @@ async def run_detection_job(pool: asyncpg.Pool, detector: FrameDetector | None =
                 device_p = r["device_probability"]
                 try:
                     jpeg = await load_frame_bytes(r["jpeg_url"])
-                    result = detector.detect(jpeg)
+                    # to_thread, not a bare call: detect() is synchronous CPU inference
+                    # (~0.3 s/frame for YOLO11s on CPU), so running it inline would hold
+                    # the event loop for the whole batch — a ~60 s API stall per tick at
+                    # detection_batch_size=200, and every request in this worker blocks.
+                    result = await asyncio.to_thread(detector.detect, jpeg)
                     server_p = result.probability
                     model_id = result.model_id
                     detections_json = json.dumps(result.detections)

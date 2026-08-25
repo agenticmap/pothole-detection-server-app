@@ -112,6 +112,12 @@ curl http://localhost:8000/health
 | `RATE_LIMIT_FRAMES_PER_HOUR` | `5000` | Max frames per device per hour |
 | `MAX_BATCH_SIZE` | `100` | Max events in a single POST batch |
 | `MAX_FRAME_SIZE_BYTES` | `10485760` | Max JPEG size (10 MB) |
+| `DETECTION_ENABLED` | `false` | Server-side detection. Off until a model exists — [runbook](./docs/phase-2.7-runbook.md), [as-built](./docs/phase-2.7-detection-enablement.md) |
+| `DETECTION_BACKEND` | `none` | `none` / `onnx` / `http` / `hybrid` |
+| `DETECTION_MODEL_PATH` | _(empty)_ | Path to a **raw** Ultralytics ONNX export (`opset=12 nms=False`); lives in `models/` |
+| `DETECTION_ROI_ENABLED` | `true` | Crop to the road band before inference — uploads are portrait windshield frames that are mostly sky |
+
+Every detection and VLM knob is documented in `.env.example`.
 
 ---
 
@@ -326,7 +332,7 @@ The schema uses **generic asset naming** (per enterprise-architecture-plan.md §
 | `asset_cluster` | Aggregated clusters (Phase 2.2) |
 | `observation_cluster_link` | Many-to-many cluster membership |
 | `fusion_run` | Fusion engine execution audit trail |
-| `fusion_pair` | Observation↔frame pairing with fused confidence |
+| `fusion_pair` | Observation↔frame pairing with fused confidence, the `match_cost` that selected it, and `is_primary` (the best view of that observation) |
 | `asset_type_registry` | Lookup: asset_type → metadata |
 | `device_rate_limit` | Persistent rate tracking (**unused** — the live limiter is in-memory per worker) |
 | `sensor_model` | Versioned ported-MATLAB classifier; one active row (Phase 2.1) |
@@ -334,6 +340,11 @@ The schema uses **generic asset naming** (per enterprise-architecture-plan.md §
 | `repair_log` | Audit trail for cluster repair/reopen (Phase 2.5) |
 | `model_disagreement` | device↔server probability gap, for Phase 3 review (Phase 2.3) |
 | `schema_migrations` | Migration ledger — filename, checksum, applied_at (Phase 2.6) |
+| `frame_label` | Human ground truth per frame: 1 pothole / 0 not / -1 unsure (Phase 2.7) |
+
+`asset_observation.sensor_class_probs`, `asset_cluster.class_probs` and `asset_cluster.bearing_deg` (Phase 2.2c, `migrations/011`) carry the class distributions and heading that the spatiotemporal crowd fusion needs; see [`docs/phase-2.2c-spatiotemporal-fusion.md`](./docs/phase-2.2c-spatiotemporal-fusion.md).
+
+`fusion_pair.match_cost` and `fusion_pair.is_primary` (Phase 2.2d, `migrations/012`) record which frame the pairing search chose for an observation and why. The search ranks candidates by a lookahead cost rather than by nearest-in-time, because the camera resolves a pothole while it is still ahead of the vehicle; see [`docs/phase-2.2d-pairing-search.md`](./docs/phase-2.2d-pairing-search.md) for the design and [`docs/phase-2.2d-runbook.md`](./docs/phase-2.2d-runbook.md) for the procedure.
 
 `asset_cluster.org_id` (Phase 2.6, `migrations/009`) is the owning municipality, or `NULL` for
 unowned. It scopes **repair writes** only; reads remain global. See
@@ -424,6 +435,26 @@ server/
 ├── requirements.txt          # Pinned dependencies
 └── README.md                 # This file
 ```
+
+---
+
+## Scripts
+
+All are run from the repo root and take `DATABASE_URL` from `.env`.
+
+| Script | What it does |
+|---|---|
+| `scripts/create_staff.py` | Provision an org + staff account for the dashboard (Phase 2.4) |
+| `scripts/seed_demo.py` | Synthetic clusters so the dashboard has something to render. **Refuses any database but `pothole_test`/`pothole_ci`** (Phase 2.5b) |
+| `scripts/detect_eval.py` | Score stored frames with a given `.onnx` and report a histogram, annotated JPEGs, and (with `--labels`) precision/recall. **Writes nothing** (Phase 2.7) |
+| `scripts/label_frames.py` | Localhost page for hand-labelling frames into `frame_label`. **Refuses `pothole_test`** — the fixtures TRUNCATE it (Phase 2.7) |
+| `scripts/backfill_detection.py` | Run detection over already-uploaded frames, then clear `processed_at` so fusion re-scores the pairs (Phase 2.7) |
+| `scripts/pairing_eval.py` | Measure the pairing search: `--diff` compares the old and new rankings, `--fit-lead` fits the camera's lead band from `frame_label`. Read-only (Phase 2.2d) |
+| `scripts/requeue_frames.py` | Clear `processed_at` and re-run fusion over stored frames — the activation path after changing any `FUSION_*` pairing knob (Phase 2.2d) |
+
+Note the two guards point in **opposite** directions, deliberately: `seed_demo.py` writes
+fabricated data so it must never touch the real database, while `label_frames.py` writes ground
+truth about real frames so it must never write to the one the tests wipe.
 
 ---
 

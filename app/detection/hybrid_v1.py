@@ -114,11 +114,17 @@ class HybridDetector:
     def _crop(self, jpeg: bytes, detections: list[dict]) -> bytes:
         """Crop to the union of detection bboxes + margin, re-encoded as JPEG.
 
-        Detections are {"conf", "xywh":[cx,cy,w,h]} in original-image pixels (see
-        onnx_v1). Returns the original bytes if there are no usable boxes or Pillow
-        isn't available — the VLM then sees the whole frame, which is still valid.
+        Detections are {"bbox": {"x","y","w","h"}} — normalized [0,1] corner-origin,
+        the same shape the device sends (see onnx_v1). Normalized rather than pixel
+        coords means this works unchanged whether or not Stage 1 applied an ROI crop.
+        Returns the original bytes if there are no usable boxes or Pillow isn't
+        available — the VLM then sees the whole frame, which is still valid.
         """
-        boxes = [d["xywh"] for d in detections if isinstance(d, dict) and "xywh" in d]
+        boxes = [
+            d["bbox"]
+            for d in detections
+            if isinstance(d, dict) and isinstance(d.get("bbox"), dict)
+        ]
         if not boxes:
             return jpeg
         try:
@@ -126,10 +132,10 @@ class HybridDetector:
 
             img = Image.open(io.BytesIO(jpeg)).convert("RGB")
             w, h = img.size
-            xs1 = [cx - bw / 2 for cx, cy, bw, bh in boxes]
-            ys1 = [cy - bh / 2 for cx, cy, bw, bh in boxes]
-            xs2 = [cx + bw / 2 for cx, cy, bw, bh in boxes]
-            ys2 = [cy + bh / 2 for cx, cy, bw, bh in boxes]
+            xs1 = [b["x"] * w for b in boxes]
+            ys1 = [b["y"] * h for b in boxes]
+            xs2 = [(b["x"] + b["w"]) * w for b in boxes]
+            ys2 = [(b["y"] + b["h"]) * h for b in boxes]
             x1, y1, x2, y2 = min(xs1), min(ys1), max(xs2), max(ys2)
             mx, my = (x2 - x1) * self.crop_margin, (y2 - y1) * self.crop_margin
             box = (
