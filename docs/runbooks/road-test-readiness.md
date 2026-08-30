@@ -156,7 +156,7 @@ a new `LOG_LEVEL` setting (default INFO).
   `.onnx` on disk, so the flag stays off. What did change: enabling it with a bad
   `DETECTION_MODEL_PATH` now logs one ERROR at startup and skips the job, instead of throwing
   every two minutes. See
-  [`phase-2.7-detection-enablement.md`](./phase-2.7-detection-enablement.md).
+  [`phase-2.7-detection-enablement.md`](../phases/phase-2.7-detection-enablement.md).
 - **The on-device probability should not be trusted on collected frames.** Measured over the
   2916 frames already collected: median 0.118, and the three top-scoring frames contain no
   pothole (a manhole cover, a crosswalk marking, and rain on the windshield at night). Judge a
@@ -212,7 +212,7 @@ Test rows were removed afterwards so they do not pollute the sensor-model fit.
   `client_id` was charset-validated before being interpolated into
   `"{device_id}/{client_id}.jpg"`. Since ingestion is anonymous, that was a live
   unauthenticated write primitive. Fixed at three layers; see
-  [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md). Not a wire break — the client
+  [`phase-2.5-dashboard-plan.md`](../phases/phase-2.5-dashboard-plan.md). Not a wire break — the client
   sends UUIDs.
 - **Tests no longer run against the drive database.** The `db_pool` fixture TRUNCATEs every
   table and used to default to `pothole_db`, so a stray `pytest` would have destroyed
@@ -222,7 +222,7 @@ Test rows were removed afterwards so they do not pollute the sensor-model fit.
 - Test count is now **264** (was 105 when this document was written, then 206). The counts
   above have been updated in place; per-phase docs keep their own historical figures.
 
-### Phase 2.6 first pass (2026-08-23) — [`phase-2.6-hardening.md`](./phase-2.6-hardening.md)
+### Phase 2.6 first pass (2026-08-23) — [`phase-2.6-hardening.md`](../phases/phase-2.6-hardening.md)
 
 Relevant to a drive:
 

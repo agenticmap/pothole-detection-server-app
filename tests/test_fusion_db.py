@@ -206,6 +206,79 @@ async def test_fusion_prefers_server_probability_over_device(db_pool):
     assert fa > fb  # identical sensor signal; A's stronger visual term wins
 
 
+async def test_a_detector_that_found_nothing_does_not_veto_the_sensor(db_pool):
+    """Phase 2.7: server_probability = 0.0 must mean "no evidence", not "clean road".
+
+    onnx_v1 reports 0.0 when no box clears the confidence threshold, and `logit`
+    clamps 0.0 to 1e-6 = -13.8155. Fed into the blend that is near-certain evidence
+    AGAINST a pothole, so a confident sensor event fuses to ~0.003 -- the camera
+    silently overrules the accelerometer on 81% of real frames. Finding no box is a
+    missing modality (the ROI may hold no road), so it falls back to the device
+    probability, exactly as a detection *failure* already does.
+    """
+    async with db_pool.acquire() as conn:
+        # Frame A: detector ran and found nothing (0.0), device saw 0.6.
+        await insert_frame(
+            conn, "fz", device_id="dvz", ts="2026-05-27T10:30:00+00:00",
+            lat=43.40, lon=-79.40, device_probability=0.6,
+        )
+        await conn.execute("UPDATE asset_frame SET server_probability=0.0 WHERE client_id='fz'")
+        await insert_observation(
+            conn, "oz", device_id="dvz", ts="2026-05-27T10:29:59.7+00:00",
+            lat=43.40, lon=-79.40, magnitude=6.0, accel_std=1.0, gbar_in_max=6.0,
+        )
+        # Frame B: identical, but the detector never ran (NULL) -- the documented
+        # fallback path. A and B must agree, because they carry the same evidence.
+        await insert_frame(
+            conn, "fy", device_id="dvy", ts="2026-05-27T10:30:00+00:00",
+            lat=43.50, lon=-79.50, device_probability=0.6,
+        )
+        await insert_observation(
+            conn, "oy", device_id="dvy", ts="2026-05-27T10:29:59.7+00:00",
+            lat=43.50, lon=-79.50, magnitude=6.0, accel_std=1.0, gbar_in_max=6.0,
+        )
+
+    await run_fusion_job(db_pool)
+
+    sql = "SELECT fused_confidence FROM fusion_pair WHERE frame_client_id=$1"
+    async with db_pool.acquire() as conn:
+        fz = await conn.fetchval(sql, "fz")
+        fy = await conn.fetchval(sql, "fy")
+
+    assert fz is not None and fy is not None
+    # Same evidence, same verdict: "scored, found nothing" == "not scored".
+    assert fz == pytest.approx(fy)
+    # And crucially not the collapsed value a 0.0 visual term would produce.
+    assert fz > 0.1, f"a silent detector vetoed the sensor: fused={fz}"
+
+
+async def test_a_real_detection_of_zero_is_still_distinguishable_in_the_column(db_pool):
+    """The 0.0 stays stored; only its *reading* by the blend changes.
+
+    Fusion must not rewrite asset_frame. `count(server_probability)` is how the
+    runbook measures backfill progress, so turning the 0.0 into a NULL at write time
+    would make "scored, found nothing" indistinguishable from "never scored".
+    """
+    async with db_pool.acquire() as conn:
+        await insert_frame(
+            conn, "fx", device_id="dvx", ts="2026-05-27T10:30:00+00:00",
+            lat=43.60, lon=-79.60, device_probability=0.6,
+        )
+        await conn.execute("UPDATE asset_frame SET server_probability=0.0 WHERE client_id='fx'")
+        await insert_observation(
+            conn, "ox", device_id="dvx", ts="2026-05-27T10:29:59.7+00:00",
+            lat=43.60, lon=-79.60, magnitude=6.0, accel_std=1.0, gbar_in_max=6.0,
+        )
+
+    await run_fusion_job(db_pool)
+
+    async with db_pool.acquire() as conn:
+        stored = await conn.fetchval(
+            "SELECT server_probability FROM asset_frame WHERE client_id='fx'"
+        )
+    assert stored == 0.0
+
+
 async def test_fit_job_is_single_flight_under_advisory_lock(db_pool):
     """Regression: run_fit_job had no advisory lock while every other job did.
 
@@ -246,7 +319,7 @@ async def test_detection_backfill_can_rescore_existing_pairs(db_pool):
     Fusion runs long before server-side detection is enabled, so pairs get a
     fused_confidence derived from the weak device probability and — because fusion
     only ever looks at frames WHERE processed_at IS NULL — would keep it forever.
-    docs/phase-2.3-detection-plan.md lists this as out of scope ("re-fusing frames
+    docs/phases/phase-2.3-detection-plan.md lists this as out of scope ("re-fusing frames
     detected after they were already paired"); the backfill closes it by clearing
     processed_at, which works only because _UPSERT_PAIR_SQL upserts on
     (event_client_id, frame_client_id).

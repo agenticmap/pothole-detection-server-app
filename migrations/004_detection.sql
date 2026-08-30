@@ -14,7 +14,7 @@
 --
 -- The server_probability / server_model_id / server_detections columns already
 -- exist (001); the detection worker is what finally populates them.
--- See docs/phase-2.3-detection-plan.md.
+-- See docs/phases/phase-2.3-detection-plan.md.
 -- ============================================================================
 
 -- Detection-completion flag (mirrors asset_frame.processed_at for the fusion job).

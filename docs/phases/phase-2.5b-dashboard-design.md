@@ -101,7 +101,7 @@ Range support is the whole mechanism — Starlette's `FileResponse` implements H
 the entire file per tile. The mount is deliberately unauthenticated: it is public OSM data, and
 the pmtiles protocol owns its own fetch so `transformRequest` never sees it.
 
-Regeneration is documented in [`dashboard/README.md`](../dashboard/README.md). The archive is a
+Regeneration is documented in [`dashboard/README.md`](../../dashboard/README.md). The archive is a
 build artefact under gitignored `storage/`.
 
 ### The palette rules, learned by getting them wrong
@@ -271,7 +271,7 @@ Two schema traps it handles, both of which otherwise produce a silently empty ma
   only by that column never appears.
 
 `pytest` TRUNCATEs every table, so a test run wipes the seed *and* the staff accounts. Accounts and
-the re-seed procedure are in [`dashboard/README.md`](../dashboard/README.md).
+the re-seed procedure are in [`dashboard/README.md`](../../dashboard/README.md).
 
 ---
 

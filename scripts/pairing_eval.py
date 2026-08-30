@@ -162,6 +162,14 @@ _HAS_FRAME_LABEL_SQL = "SELECT to_regclass('public.frame_label') IS NOT NULL"
 # The minimum number of confirmed frames worth fitting a p5/p95 band from. Below
 # this the percentiles are noise dressed as a measurement, and printing them would
 # invite someone to paste them into the config.
+#
+# This floor applies to the number of frames the fit can actually USE -- labelled
+# `pothole` AND holding a pothole-classed observation inside the search window --
+# not to the label count. Those two differ by a lot: at 65 pothole labels only 3
+# frames were usable, because most potholes have no coincident frame at all. An
+# earlier version checked the label count here and then fitted on the 3, printing
+# a band with a "put these in .env" instruction under it. That is the exact
+# failure this constant exists to prevent.
 _MIN_LABELS_TO_FIT = 30
 
 
@@ -233,26 +241,30 @@ async def run_fit_lead(pool, args) -> int:
         return 1
 
     n_labels = await pool.fetchval(_COUNT_LABELS_SQL)
-    if n_labels < _MIN_LABELS_TO_FIT:
-        print(
-            f"Only {n_labels} frame(s) are labelled as containing a pothole; "
-            f"{_MIN_LABELS_TO_FIT} is the floor for fitting a band."
-        )
-        print(
-            "  Refusing to print percentiles from this few rows: they would be noise "
-            "wearing a measurement's clothes, and someone would paste them into "
-            "FUSION_LEAD_NEAR_M."
-        )
+    if not n_labels:
+        print("No frame is labelled as containing a pothole yet. Nothing to fit.")
         print("  Label frames with: python scripts/label_frames.py")
         return 1
 
     row = await pool.fetchrow(
         _FIT_LEAD_SQL, args.window_m, float(args.window_ms_max), args.speed_floor
     )
-    if not row or not row["n"]:
+    usable = (row["n"] or 0) if row else 0
+    if usable < _MIN_LABELS_TO_FIT:
         print(
-            f"{n_labels} confirmed frame(s), but none has a pothole-classed "
-            "observation inside the search window. Nothing to fit."
+            f"{n_labels} frame(s) are labelled as containing a pothole, but only "
+            f"{usable} of them has a pothole-classed observation inside the search "
+            f"window. {_MIN_LABELS_TO_FIT} usable frames is the floor for fitting a band."
+        )
+        print(
+            "  Refusing to print percentiles from this few rows: they would be noise "
+            "wearing a measurement's clothes, and someone would paste them into "
+            "FUSION_LEAD_NEAR_M."
+        )
+        print(
+            "  Note what closes this gap: not more labels, but more frames captured "
+            "where the accelerometer also fired. Most labelled potholes were never "
+            "driven over by the wheel, so no amount of labelling reaches the floor."
         )
         return 1
 

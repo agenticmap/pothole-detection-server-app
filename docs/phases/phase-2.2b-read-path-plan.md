@@ -1,7 +1,7 @@
 # Phase 2.2b — Pothole Read Path (As-Built)
 
-> Status: **Implemented** (server side). Companion to [`docs/roadmap.md`](./roadmap.md) §2.6
-> and the [`docs/phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md) it follows.
+> Status: **Implemented** (server side). Companion to [`docs/roadmap.md`](../roadmap.md) §2.6
+> and the [`docs/phases/phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md) it follows.
 > The Android consumer (roadmap §2.7) is documented in the app repo's
 > `docs/phase-2.2b-changes.md`.
 

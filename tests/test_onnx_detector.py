@@ -26,12 +26,23 @@ FRAME_W, FRAME_H = 480, 640
 class FakeSession:
     """Stands in for ort.InferenceSession: records the fed tensor, returns a fixture."""
 
-    def __init__(self, output):
+    def __init__(self, output, shapeless=False):
         self._output = output
+        self.shapeless = shapeless
         self.last_tensor = None
 
     def get_inputs(self):
         return [SimpleNamespace(name="images")]
+
+    def get_outputs(self):
+        """Real exports declare a static shape; the ctor guard reads it to fail at boot.
+
+        `shapeless=True` models a dynamic export, where the check has to defer to
+        `_check_layout` on the first frame instead.
+        """
+        if self.shapeless:
+            return [SimpleNamespace(shape=["batch", "channels", "anchors"])]
+        return [SimpleNamespace(shape=list(self._output.shape))]
 
     def run(self, _outputs, feed):
         self.last_tensor = next(iter(feed.values()))
@@ -49,6 +60,24 @@ def _output(*boxes):
     for i, (cx, cy, w, h, score) in enumerate(boxes):
         arr[0, :, i] = [cx, cy, w, h, score]
     return arr
+
+
+def _multi(*boxes, nc=4):
+    """Build a raw [1, 4+nc, N] tensor from (cx, cy, w, h, {class_id: score}) tuples.
+
+    The single-class `_output` cannot express the case that matters in Phase 2.7b:
+    two boxes of different classes competing to be the frame probability.
+    """
+    n = max(len(boxes), 8)
+    arr = np.zeros((1, 4 + nc, n), dtype=np.float32)
+    for i, (cx, cy, w, h, scores) in enumerate(boxes):
+        arr[0, :4, i] = [cx, cy, w, h]
+        for class_id, score in scores.items():
+            arr[0, 4 + class_id, i] = score
+    return arr
+
+
+ROAD_CLASSES = ("pothole", "manhole", "grate", "patch")
 
 
 def _jpeg(width=FRAME_W, height=FRAME_H, road_band=None):
@@ -74,7 +103,7 @@ def _detector(monkeypatch, output, **kw):
     works whether or not onnxruntime is installed, and monkeypatch reverts it — the
     decode arithmetic is what is under test, not the runtime.
     """
-    session = FakeSession(output)
+    session = FakeSession(output, shapeless=kw.pop("shapeless", False))
     monkeypatch.setitem(
         sys.modules,
         "onnxruntime",
@@ -208,7 +237,7 @@ class TestDecode:
         arr = np.zeros((1, 7, 8), dtype=np.float32)  # 4 + 3 classes
         arr[0, :4, 0] = [320.0, 320.0, 48.0, 64.0]
         arr[0, 4:, 0] = [0.1, 0.2, 0.8]  # class 2 wins
-        det, _ = _detector(monkeypatch, arr)
+        det, _ = _detector(monkeypatch, arr, labels=("pothole", "manhole", "grate"))
         det_out = det.detect(_jpeg()).detections[0]
         assert det_out["class_id"] == 2
         assert det_out["confidence"] == pytest.approx(0.8)
@@ -240,7 +269,7 @@ class TestContract:
         The real device payload is verified against pothole_db:
         {"bbox": {"x","y","w","h"}, "label", "class_id", "confidence"}.
         """
-        det, _ = _detector(monkeypatch, _output(CENTRE_BOX), label="pothole")
+        det, _ = _detector(monkeypatch, _output(CENTRE_BOX), labels=("pothole",))
         d = det.detect(_jpeg()).detections[0]
         assert set(d) == {"bbox", "label", "class_id", "confidence"}
         assert set(d["bbox"]) == {"x", "y", "w", "h"}
@@ -263,3 +292,128 @@ class TestContract:
         bbox = det.detect(_jpeg(width=640, height=480)).detections[0]["bbox"]
         assert 0.0 <= bbox["x"] <= 1.0
         assert 0.0 <= bbox["y"] <= 1.0
+
+
+class TestClassAwareProbability:
+    """Phase 2.7b. Fusion blends `probability` with no notion of class, so the number
+    must describe the *pothole* class alone — see app/fusion/service.py."""
+
+    def test_a_confident_manhole_does_not_become_a_confident_pothole(self, monkeypatch):
+        """The regression this guard exists for.
+
+        Before the fix `probability` was `max` over every class, so this frame
+        reported 0.93 — and fusion, which cannot tell a manhole from a pothole,
+        would have read it as a confirmed pothole.
+        """
+        det, _ = _detector(
+            monkeypatch,
+            _multi(
+                (160.0, 200.0, 40.0, 40.0, {0: 0.41}),  # a weak pothole
+                (400.0, 480.0, 40.0, 40.0, {1: 0.93}),  # a confident manhole
+            ),
+            labels=ROAD_CLASSES,
+        )
+        result = det.detect(_jpeg())
+        assert result.probability == pytest.approx(0.41)
+        # Both boxes are still reported; only the frame scalar is class-filtered.
+        assert {d["class_id"] for d in result.detections} == {0, 1}
+
+    def test_only_other_classes_scores_zero(self, monkeypatch):
+        """0.0, not None: the detector ran and found no pothole.
+
+        NULLIF(server_probability, 0.0) then treats it as *no measurement* and falls
+        back to device_probability, which is the intended reading — "that is a
+        manhole" is not evidence about a pothole in either direction.
+        """
+        det, _ = _detector(
+            monkeypatch,
+            _multi((400.0, 480.0, 40.0, 40.0, {2: 0.88})),
+            labels=ROAD_CLASSES,
+        )
+        result = det.detect(_jpeg())
+        assert result.probability == 0.0
+        assert len(result.detections) == 1
+
+    def test_the_best_pothole_wins_not_the_first(self, monkeypatch):
+        det, _ = _detector(
+            monkeypatch,
+            _multi(
+                (160.0, 200.0, 40.0, 40.0, {0: 0.31}),
+                (400.0, 480.0, 40.0, 40.0, {0: 0.62}),
+            ),
+            labels=ROAD_CLASSES,
+        )
+        assert det.detect(_jpeg()).probability == pytest.approx(0.62)
+
+    def test_primary_class_id_selects_which_class_is_reported(self, monkeypatch):
+        """The setting is real, not decorative: point it at manhole and the manhole scores."""
+        det, _ = _detector(
+            monkeypatch,
+            _multi(
+                (160.0, 200.0, 40.0, 40.0, {0: 0.41}),
+                (400.0, 480.0, 40.0, 40.0, {1: 0.93}),
+            ),
+            labels=ROAD_CLASSES,
+            primary_class_id=1,
+        )
+        assert det.detect(_jpeg()).probability == pytest.approx(0.93)
+
+    def test_label_follows_the_class_id(self, monkeypatch):
+        det, _ = _detector(
+            monkeypatch,
+            _multi(
+                (160.0, 200.0, 40.0, 40.0, {0: 0.80}),
+                (400.0, 480.0, 40.0, 40.0, {3: 0.70}),
+            ),
+            labels=ROAD_CLASSES,
+        )
+        by_class = {d["class_id"]: d["label"] for d in det.detect(_jpeg()).detections}
+        assert by_class == {0: "pothole", 3: "patch"}
+
+    def test_single_class_behaviour_is_unchanged_by_default(self, monkeypatch):
+        """Every existing export must keep loading and scoring exactly as before."""
+        det, _ = _detector(monkeypatch, _output(CENTRE_BOX))
+        result = det.detect(_jpeg())
+        assert result.probability == pytest.approx(0.9)
+        assert result.detections[0]["label"] == "pothole"
+
+
+class TestClassCountGuard:
+    """A labels/nc mismatch mislabels every box AND scores the wrong class into
+    server_probability. It must be loud, and early."""
+
+    def test_mismatch_is_rejected_at_construction(self, monkeypatch):
+        with pytest.raises(ValueError, match="class name"):
+            _detector(monkeypatch, _multi((1.0, 1.0, 1.0, 1.0, {0: 0.5})), labels=("pothole",))
+
+    def test_mismatch_is_rejected_at_decode_when_the_export_is_dynamic(self, monkeypatch):
+        """A dynamic export declares no channel count, so the ctor cannot check it.
+        _check_layout has the real array and catches it on the first frame."""
+        det, _ = _detector(
+            monkeypatch,
+            _multi((1.0, 1.0, 1.0, 1.0, {0: 0.5})),
+            labels=("pothole",),
+            shapeless=True,
+        )
+        with pytest.raises(ValueError, match="class name"):
+            det.detect(_jpeg())
+
+    def test_a_wrong_export_still_reports_the_export_problem_first(self, monkeypatch):
+        """An NMS-baked export is not a class-count problem; the message must not
+        send someone off to edit DETECTION_CLASS_NAMES."""
+        det, _ = _detector(monkeypatch, np.zeros((1, 300, 6), dtype=np.float32))
+        with pytest.raises(ValueError, match="nms=False"):
+            det.detect(_jpeg())
+
+    def test_primary_class_id_must_index_the_labels(self, monkeypatch):
+        with pytest.raises(ValueError, match="primary_class_id"):
+            _detector(
+                monkeypatch,
+                _output(CENTRE_BOX),
+                labels=("pothole",),
+                primary_class_id=2,
+            )
+
+    def test_labels_cannot_be_empty(self, monkeypatch):
+        with pytest.raises(ValueError, match="at least one class"):
+            _detector(monkeypatch, _output(CENTRE_BOX), labels=())

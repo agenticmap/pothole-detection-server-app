@@ -132,7 +132,7 @@ database has **one** clusterable pothole member, and `cluster_min_points = 3` me
 form from it.
 
 So "no clusters because there is only one device" was only part of the story; the outlier gate is
-the larger cause. `docs/phase-2.1-fusion-engine-plan.md` listed tuning
+the larger cause. `docs/phases/phase-2.1-fusion-engine-plan.md` listed tuning
 `sensor_iforest_contamination` on pilot data as an open item — and Phase 2.2d has now measured it
 and found that tuning **cannot** fix this: below contamination 0.05 the gate flags nothing but
 potholes, so the dial runs between "no gate" and "no potholes". The fix is the feature set, not the

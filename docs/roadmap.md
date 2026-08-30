@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-23
+updated: 2026-08-30
 ---
 
 # Pothole Detection — Roadmap
@@ -16,12 +16,12 @@ updated: 2026-08-23
 > - **Phase 2 is built, not "planned".** Ingestion, the ported sensor model, fusion, clustering,
 >   the public and staff read paths, staff auth, and the operator dashboard (server + browser
 >   console) all exist. See the per-phase plan docs:
->   [`phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md),
->   [`phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md),
->   [`phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md),
->   [`phase-2.3-detection-plan.md`](./phase-2.3-detection-plan.md),
->   [`phase-2.4-auth-plan.md`](./phase-2.4-auth-plan.md),
->   [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
+>   [`phase-2.1-fusion-engine-plan.md`](./phases/phase-2.1-fusion-engine-plan.md),
+>   [`phase-2.2-clustering-plan.md`](./phases/phase-2.2-clustering-plan.md),
+>   [`phase-2.2b-read-path-plan.md`](./phases/phase-2.2b-read-path-plan.md),
+>   [`phase-2.3-detection-plan.md`](./phases/phase-2.3-detection-plan.md),
+>   [`phase-2.4-auth-plan.md`](./phases/phase-2.4-auth-plan.md),
+>   [`phase-2.5-dashboard-plan.md`](./phases/phase-2.5-dashboard-plan.md).
 > - **§2.9's admin surface is superseded.** It proposed Supabase Studio for repair marking;
 >   `POST /api/v1/clusters/{id}/repair` now does it with an audit trail (Phase 2.5).
 > - **The fusion status blockquote below is stale** — it describes the app circa Phase 1.5.
@@ -31,7 +31,7 @@ updated: 2026-08-23
 >   is no MATLAB in the pipeline and no gRPC sidecar — the engine is in-process and swappable
 >   behind `app/fusion/engine.py`.
 >
-> **For drive readiness, read [`road-test-readiness.md`](./road-test-readiness.md) instead** — it
+> **For drive readiness, read [`road-test-readiness.md`](./runbooks/road-test-readiness.md) instead** — it
 > is current as of 2026-08-12 and lists the blockers found and fixed before the first collection
 > drive.
 
@@ -45,12 +45,18 @@ This document tracks the full multi-phase plan for the app. Shipped phases get a
 | 2 | ✅ Built (2.0–2.4) | Server backend + sensor↔visual fusion + crowd clustering + read path + staff auth |
 | 2.5 | ✅ Shipped | Operator dashboard: vector tiles, detail panel, repair marking, and the browser console (`dashboard/`). |
 | 2.5b/c | ✅ Shipped | Dashboard design pass: Organic skin, self-hosted Protomaps vector basemap, KPI/filter dock + `/clusters/stats`, severity recalibrated to the real [0,1] scale, and a synthetic demo seed. Fixed a MapLibre worker 404 that had meant **no vector tile ever loaded**. |
-| 2.6 | 🟡 In progress | Production hardening: public-read 500 fix, real `/health` 503, fit-job advisory lock, `schema_migrations` ledger, containerised dashboard/basemap, org-scoped repair writes, EXIF stripped on ingest, `POST /auth/logout`. See [`phase-2.6-hardening.md`](./phase-2.6-hardening.md). |
-| 2.7 | 🟡 Blocked on a model | Server-side detection enablement: the first tests that run `onnx_v1.py`, a raw-export layout guard, an ROI crop for the real portrait frames (1.78x more road pixels), `server_detections` reshaped to match the device's, `frame_label` ground truth + a labelling tool, offline evaluation, a backfill that also re-fuses stale pairs, and a `to_thread` fix for a ~60 s API stall per tick. No `.onnx` exists yet, so detection is still off. See [`phase-2.7-detection-enablement.md`](./phase-2.7-detection-enablement.md). |
-| 2.2c | ✅ Shipped | Spatiotemporal crowd fusion, implementing §4.4–4.5 of the *Probabilistic-based crowdsourcing* paper: cluster confidence is a spatiotemporally weighted (Gaussian RBF over distance-to-centroid and age) combination of its members' class distributions rather than a mean, opposing carriageways stay separate defects, and the per-event class posterior is finally persisted. See [`phase-2.2c-spatiotemporal-fusion.md`](./phase-2.2c-spatiotemporal-fusion.md). |
-| 2.2d | ✅ Shipped | The pairing search. The old ranking's ideal match was a frame taken at the same instant and place as the wheel impact — geometrically backwards, since the camera resolves a pothole while it is still *ahead* of the car. Replaced with a lookahead cost (lead band + kinematic residual + a penalty for frames shot after the event), a temporal window derived from speed instead of contradicting the spatial one, `is_primary` so the member gate reads the best *view* rather than the loudest *verdict*, and a frame-only member arm built but shipped off. Re-fusing `pothole_db` moved mean separation 5.25 m → 15.29 m and mean Δt −93 ms → −537 ms. See [`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md) for the design and [`phase-2.2d-runbook.md`](./phase-2.2d-runbook.md) for the procedure. |
-| 2.8 | 📋 Recommended next | Capture quality + provenance. Analysing the first 2916 real frames found the limiting factor is the data, not the detector: wire timestamps were whole-second (so fusion's Δt had only **three** possible values inside its 3000 ms window), one GPS fix is reused across ~3 frames, 25% of every inference is black padding the app adds itself, 69% of frames came from one night hour at 72 km/h, and the session join key the app already records is never uploaded — so there is no coverage denominator and no source of training negatives. See [`app-capture-findings.md`](./app-capture-findings.md). |
+| 2.6 | 🟡 In progress | Production hardening: public-read 500 fix, real `/health` 503, fit-job advisory lock, `schema_migrations` ledger, containerised dashboard/basemap, org-scoped repair writes, EXIF stripped on ingest, `POST /auth/logout`. See [`phase-2.6-hardening.md`](./phases/phase-2.6-hardening.md). |
+| 2.7 | ✅ Shipped | Server-side detection enablement: the first tests that run `onnx_v1.py`, a raw-export layout guard, an ROI crop for the real portrait frames (1.78x more road pixels), `server_detections` reshaped to match the device's, `frame_label` ground truth + a labelling tool, offline evaluation, a backfill that also re-fuses stale pairs, and a `to_thread` fix for a ~60 s API stall per tick. Three models have since been trained on the 5322-image archive (`yolo11s_pothole_v1/v2/v3`) and measured against 375 hand labels. Detection is still gated **off** pending 2.7b, because adding hand-labelled negatives makes recall *worse*, not better. See [`phase-2.7-detection-enablement.md`](./phases/phase-2.7-detection-enablement.md). |
+| 2.2c | ✅ Shipped | Spatiotemporal crowd fusion, implementing §4.4–4.5 of the *Probabilistic-based crowdsourcing* paper: cluster confidence is a spatiotemporally weighted (Gaussian RBF over distance-to-centroid and age) combination of its members' class distributions rather than a mean, opposing carriageways stay separate defects, and the per-event class posterior is finally persisted. See [`phase-2.2c-spatiotemporal-fusion.md`](./phases/phase-2.2c-spatiotemporal-fusion.md). |
+| 2.2d | ✅ Shipped | The pairing search. The old ranking's ideal match was a frame taken at the same instant and place as the wheel impact — geometrically backwards, since the camera resolves a pothole while it is still *ahead* of the car. Replaced with a lookahead cost (lead band + kinematic residual + a penalty for frames shot after the event), a temporal window derived from speed instead of contradicting the spatial one, `is_primary` so the member gate reads the best *view* rather than the loudest *verdict*, and a frame-only member arm built but shipped off. Re-fusing `pothole_db` moved mean separation 5.25 m → 15.29 m and mean Δt −93 ms → −537 ms. See [`phase-2.2d-pairing-search.md`](./phases/phase-2.2d-pairing-search.md) for the design and [`phase-2.2d-runbook.md`](./runbooks/phase-2.2d-runbook.md) for the procedure. |
+| 2.7b | ✅ Shipped (negative result) | **Road-surface classes.** Shipped: `frame_box` (migration 013) with a `boxed_at` reviewed-marker, box-drawing mode in the labelling tool (draft/submit, arrow navigation, thin-crack warning), a class-aware decoder — frame probability now comes from the pothole class alone and a labels/nc mismatch fails at startup — and an exporter that refuses to ship unreviewed frames as background. 200 frames reviewed, 43 boxes drawn (30 manhole / 7 grate / 6 patch), `yolo11s_pothole_v4` trained at nc=5. **Result: negative.** Recall fell 0.354 -> 0.215; the data-poor distractor classes steal potholes (any-class recall is 0.431, double the pothole-only 0.215; 15 of 65 positives are outscored by a non-pothole class). Root cause identified: **every real-domain box is a negative** — no real pothole has ever been boxed. Next: box the 65 positives, which requires rebuilding the holdout first. See [`phase-2.7b-road-surface-classes.md`](./phases/phase-2.7b-road-surface-classes.md). |
+| — | 📖 Record | **Detection research record.** Consolidated account of the five detection models, the measurement failure behind them, and what can and cannot be concluded — written to be read on its own and to source a report. See [`detection-research-record.md`](./research/detection-research-record.md). |
+| 2.7c | 🔧 In progress | **Public data (RDD2022).** The v2-v4 collapse was diagnosed as a positive drought: every real-domain box was a negative. Ingested 2575 real windshield-smartphone potholes from RDD2022 (US/Japan/Czech) via `scripts/ingest_rdd2022.py`. **Recall recovered 0.215 -> 0.677 -- the ratchet is broken -- but v5 still does not beat v1** (0.708 recall, and fewer false positives at every matched true-positive count). Likely causes: RDD boxes are small and distant (median 0.53% of frame area) while the ROI crop sees near-field road, plus a `batch=4` confound forced by VRAM. Establishes that a **promotion gate** is mandatory: v2, v3, v4 and v5 all pass archive metrics (mAP50 ~0.51 throughout) and all fail the holdout. See [`phase-2.7c-public-data.md`](./phases/phase-2.7c-public-data.md). |
+| 2.9 | 🔧 In progress | **VLM verification — the instrument.** `hybrid_v1.py` has shipped since 2.3b with 21 tests, all against *fake* verifiers: no VLM has ever seen a frame from this corpus, so every number behind the design is an assumption. Shipped: `scripts/vlm_eval.py`, a read-only harness scoring the labelled frames through the real production path and reporting the VLM's binary verdict, matched-recall curves for Stage 1 / VLM / blend, band tables, and a free blend-weight sweep from a cached run; plus `openrouter` and `ollama` as named backends (same stdlib client as `local_http`, no new dependency). Also settles the thresholds on 340 labels rather than 140: **auto-accept >0.75 fires on 5 frames of 5,615 and the one labelled frame there is a false positive; auto-reject <0.40 would discard 55 of the 65 known potholes.** Scores prioritise, they never auto-label. See [`phase-2.9-vlm-verification.md`](./phases/phase-2.9-vlm-verification.md). |
+| 2.8 | 📋 Recommended next | Capture quality + provenance. Analysing the first 2916 real frames found the limiting factor is the data, not the detector: wire timestamps were whole-second (so fusion's Δt had only **three** possible values inside its 3000 ms window), one GPS fix is reused across ~3 frames, 25% of every inference is black padding the app adds itself, 69% of frames came from one night hour at 72 km/h, and the session join key the app already records is never uploaded — so there is no coverage denominator and no source of training negatives. See [`app-capture-findings.md`](./research/app-capture-findings.md). |
 | 3 | 📋 Planned | On-device ML upgrade + labeled-data flywheel |
+| 3.6 | 📋 Planned | **Model B -- street furniture inventory.** Traffic lights, signs, poles, hydrants. An *integration*, not an ML project: the stock `yolo11s.pt` already detects several of these with zero training. Full-frame (the pothole ROI crop discards the top 45% where they live), sampled at low rate (static infrastructure needs one detection per object, not 3/second), its own table, and it must **never** write `server_probability`. See [`detection-model-strategy.md`](./architecture/detection-model-strategy.md). |
+| 3.7 | 📋 Planned | **Model C -- road markings.** Lane lines, arrows, crosswalks. **Segmentation, not detection** -- a lane line is long, thin and diagonal, so an axis-aligned box around one is mostly asphalt. Different architecture (CLRNet / LaneATT or semantic segmentation) and a different evaluation regime. See [`detection-model-strategy.md`](./architecture/detection-model-strategy.md). |
 | 4 | 📋 Planned | Production hardening + public release |
 
 > ### Fusion status — important clarification
@@ -98,7 +104,7 @@ Replaces the stub classifier with a YOLOv8-nano pothole detector and surfaces li
 1. Pick a YOLOv8n pothole `.tflite` (Roboflow Universe / Kaggle / self-train via Ultralytics).
 2. Drop it at `app/src/main/assets/road_gate.tflite`.
 3. Optional: `app/src/main/assets/road_gate_labels.txt` (defaults to `["pothole"]`).
-4. Fill in [`docs/model-attribution.md`](./model-attribution.md).
+4. Fill in [`docs/reference/model-attribution.md`](./reference/model-attribution.md).
 5. Rebuild + install.
 
 After ship: the app repo's `docs/phase-1.6-changes.md` (to be written).
@@ -109,7 +115,7 @@ After ship: the app repo's `docs/phase-1.6-changes.md` (to be written).
 
 Goal: stand up the backend so events + frames stop accumulating forever, run server-side ML on uploaded frames, run the sensor↔visual fusion job whose contract was locked in Phase 1.6, cluster crowd-sourced points into confirmed potholes, and serve them back to the app.
 
-> **Phase 2.0 (ingestion server) is shipped.** **Phase 2.1 — Sensor Classification + Fusion Engine v1 is now implemented** (see [`docs/phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md)). The original 2017 MATLAB accelerometer classifier (k-means++ → GMM → Gaussian-NB) was ported server-side as a self-bootstrapping `sensor_model`; its `P(pothole)` feeds a logit-space sigmoid fusion with the camera's on-device probability (this §2.4). An Isolation-Forest outlier gate and an IRI-style severity output were added. Jobs run in-process via APScheduler. **Phase 2.2 — the crowd clustering job (§2.5 below) is now implemented** (see [`docs/phase-2.2-clustering-plan.md`](./phase-2.2-clustering-plan.md)): a third APScheduler job runs PostGIS `ST_ClusterDBSCAN` over recent high-confidence detections (sensor potholes + fused pairs) and upserts repair-safe `asset_cluster` rows. **Phase 2.2b — the read path (§2.6 below) is now implemented** (see [`docs/phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md)): a public, zoom-aware `GET /api/v1/potholes?bbox&zoom` endpoint serves the repair-filtered clusters back to the app (which renders them as map markers, §2.7). **Phase 2.3 — the server-side detection model (§2.3 below) is now implemented** (see [`docs/phase-2.3-detection-plan.md`](./phase-2.3-detection-plan.md)): a pluggable inference worker (in-process ONNX, or external HTTP) runs a bigger YOLO on uploaded frames, populates `asset_frame.server_*`, feeds the stronger visual signal into fusion via `COALESCE(server_probability, device_probability)`, and logs device↔server disagreement. Ships gated off (`DETECTION_ENABLED`) until a model is supplied. **Phase 2.3b** extends this with a `hybrid` backend — the Stage-1 detector plus a pluggable VLM verifier (Claude / Gemini / local) that confirms only ambiguous frames to cut false positives; the rationale and design are in [`docs/detection-approach.md`](./detection-approach.md). **Phase 2.4 — the city-staff auth tier** (see [`docs/phase-2.4-auth-plan.md`](./phase-2.4-auth-plan.md)) split the read path into a public locations-only tier and a staff detail tier behind RS256 bearer tokens. **Phase 2.5 — the operator dashboard is now implemented** (see [`docs/phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md)): staff-gated `ST_AsMVT` vector tiles for the map, a cluster detail endpoint (members, paired frames, repair history), authenticated frame image serving, and `POST /api/v1/clusters/{id}/repair` — the first write path to `asset_cluster` outside the clustering job, audited in a new `repair_log` table — plus the browser console itself (`dashboard/`: Vite + TypeScript + MapLibre GL JS, served at `/dashboard`), which closes the loop from a phone detecting a pothole to an operator marking it repaired. For what it takes to run a real on-road test of the full loop, see [`docs/road-test-readiness.md`](./road-test-readiness.md).
+> **Phase 2.0 (ingestion server) is shipped.** **Phase 2.1 — Sensor Classification + Fusion Engine v1 is now implemented** (see [`docs/phases/phase-2.1-fusion-engine-plan.md`](./phases/phase-2.1-fusion-engine-plan.md)). The original 2017 MATLAB accelerometer classifier (k-means++ → GMM → Gaussian-NB) was ported server-side as a self-bootstrapping `sensor_model`; its `P(pothole)` feeds a logit-space sigmoid fusion with the camera's on-device probability (this §2.4). An Isolation-Forest outlier gate and an IRI-style severity output were added. Jobs run in-process via APScheduler. **Phase 2.2 — the crowd clustering job (§2.5 below) is now implemented** (see [`docs/phases/phase-2.2-clustering-plan.md`](./phases/phase-2.2-clustering-plan.md)): a third APScheduler job runs PostGIS `ST_ClusterDBSCAN` over recent high-confidence detections (sensor potholes + fused pairs) and upserts repair-safe `asset_cluster` rows. **Phase 2.2b — the read path (§2.6 below) is now implemented** (see [`docs/phases/phase-2.2b-read-path-plan.md`](./phases/phase-2.2b-read-path-plan.md)): a public, zoom-aware `GET /api/v1/potholes?bbox&zoom` endpoint serves the repair-filtered clusters back to the app (which renders them as map markers, §2.7). **Phase 2.3 — the server-side detection model (§2.3 below) is now implemented** (see [`docs/phases/phase-2.3-detection-plan.md`](./phases/phase-2.3-detection-plan.md)): a pluggable inference worker (in-process ONNX, or external HTTP) runs a bigger YOLO on uploaded frames, populates `asset_frame.server_*`, feeds the stronger visual signal into fusion via `COALESCE(server_probability, device_probability)`, and logs device↔server disagreement. Ships gated off (`DETECTION_ENABLED`) until a model is supplied. **Phase 2.3b** extends this with a `hybrid` backend — the Stage-1 detector plus a pluggable VLM verifier (Claude / Gemini / local) that confirms only ambiguous frames to cut false positives; the rationale and design are in [`docs/architecture/detection-approach.md`](./architecture/detection-approach.md). **Phase 2.4 — the city-staff auth tier** (see [`docs/phases/phase-2.4-auth-plan.md`](./phases/phase-2.4-auth-plan.md)) split the read path into a public locations-only tier and a staff detail tier behind RS256 bearer tokens. **Phase 2.5 — the operator dashboard is now implemented** (see [`docs/phases/phase-2.5-dashboard-plan.md`](./phases/phase-2.5-dashboard-plan.md)): staff-gated `ST_AsMVT` vector tiles for the map, a cluster detail endpoint (members, paired frames, repair history), authenticated frame image serving, and `POST /api/v1/clusters/{id}/repair` — the first write path to `asset_cluster` outside the clustering job, audited in a new `repair_log` table — plus the browser console itself (`dashboard/`: Vite + TypeScript + MapLibre GL JS, served at `/dashboard`), which closes the loop from a phone detecting a pothole to an operator marking it repaired. For what it takes to run a real on-road test of the full loop, see [`docs/runbooks/road-test-readiness.md`](./runbooks/road-test-readiness.md).
 
 ### 2.1 Backend choice
 
@@ -222,7 +228,7 @@ with `w_s = w_v = 0.5` to start; refined offline against labeled data.
 > `FUSION_WINDOW_MS_MAX`, and `window_m` is 40 m. Nor is the winner the nearest candidate in time —
 > that preferred the frame taken on top of the pothole, which the camera cannot see. It is now the
 > lowest-cost candidate under a lookahead model. See
-> [`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md).
+> [`phase-2.2d-pairing-search.md`](./phases/phase-2.2d-pairing-search.md).
 >
 > Note also that §3.4 below specifies `w_s = w_v = 1.0` for the on-device version while the server
 > ships `0.5`. That is not a typo in one of the two: with weights summing to 1 the blend is a
@@ -237,7 +243,7 @@ Cron every 15 minutes. PostGIS `ST_ClusterDBSCAN(geom, eps_meters := 25, minpoin
 - `severity` = median of contributing events' magnitudes
 - `confidence` — **as built, this is no longer a plain mean.** Phase 2.2c integrates the
   members' class distributions with spatiotemporal RBF weighting, so recency and proximity
-  to the centroid matter. See [`phase-2.2c-spatiotemporal-fusion.md`](./phase-2.2c-spatiotemporal-fusion.md).
+  to the centroid matter. See [`phase-2.2c-spatiotemporal-fusion.md`](./phases/phase-2.2c-spatiotemporal-fusion.md).
 - `distinct_devices` = `COUNT(DISTINCT device_id)`
 - Only clusters with `distinct_devices >= 2` are public (suppresses single-user noise)
 
@@ -277,7 +283,7 @@ Response 200:
 > drains in one burst — see `road-test-readiness.md`), and the limiter is in-memory per
 > worker, not table-backed. Per-IP rules, the storage budget, frame GC and shadow-ban are all
 > still unimplemented; they are what remains of Phase 2.6 after its first pass
-> ([`phase-2.6-hardening.md`](./phase-2.6-hardening.md)), which took the startup-path
+> ([`phase-2.6-hardening.md`](./phases/phase-2.6-hardening.md)), which took the startup-path
 > correctness fixes, the container deployment story and the Phase 2.5 security leftovers
 > instead. Note `migrations/001` already carries an unused `device_rate_limit` table for the
 > table-backed limiter.
@@ -294,11 +300,11 @@ Response 200:
 > direct SQL — there is no Supabase Studio in this deployment, and hand-editing `repaired_at`
 > on a live database was the only option before. The "v2 dashboard" below is being built as
 > the operator dashboard (MapLibre rather than Next.js); its server side is done, the browser
-> frontend is not. See [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
+> frontend is not. See [`phase-2.5-dashboard-plan.md`](./phases/phase-2.5-dashboard-plan.md).
 > Bulk shadow-ban and manual `verified` cluster creation remain unimplemented. Repair
 > writes are now **org-scoped** — `migrations/009` added `asset_cluster.org_id`, so a
 > staff member of one municipality can no longer close out another's clusters; see
-> [`phase-2.6-hardening.md`](./phase-2.6-hardening.md) §6 (including why unowned clusters
+> [`phase-2.6-hardening.md`](./phases/phase-2.6-hardening.md) §6 (including why unowned clusters
 > are admin-only). Reads are still global.
 
 Phase 2 v1: **Supabase Studio**. Direct SQL for repair updates, bulk shadow-ban, manual `verified` cluster creation.

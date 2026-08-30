@@ -2,7 +2,7 @@
 -- Pothole Detection Platform — spatiotemporal crowd fusion (Phase 2.2c)
 -- ============================================================================
 -- Additive, idempotent. Supports the integration half of Sattar's probabilistic
--- crowdsourcing technique (docs/phase-2.2c-spatiotemporal-fusion.md).
+-- crowdsourcing technique (docs/phases/phase-2.2c-spatiotemporal-fusion.md).
 --
 -- Three columns, each enabling a specific step of the method:
 --

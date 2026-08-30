@@ -2,7 +2,7 @@
 
 Tiles are generated in PostGIS via ST_AsMVT and served straight from FastAPI
 rather than from a separate tile server (Martin). The written architecture
-(docs/enterprise-architecture-plan.md §3.3) calls for Martin; serving from here
+(docs/architecture/enterprise-architecture-plan.md §3.3) calls for Martin; serving from here
 instead is deliberate:
 
   - Martin has no authorization layer at all — it expects a reverse proxy to do

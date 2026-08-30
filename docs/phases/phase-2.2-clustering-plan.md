@@ -1,7 +1,7 @@
 # Phase 2.2 — Crowd Clustering Job (As-Built)
 
-> Status: **Implemented.** Companion to [`docs/roadmap.md`](./roadmap.md) §2.5 and the
-> [`docs/phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md) it follows.
+> Status: **Implemented.** Companion to [`docs/roadmap.md`](../roadmap.md) §2.5 and the
+> [`docs/phases/phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md) it follows.
 > This adds the spatial clustering job that was explicitly deferred from Phase 2.1.
 
 ## Context

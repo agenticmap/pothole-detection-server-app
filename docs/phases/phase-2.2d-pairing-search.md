@@ -8,7 +8,7 @@ updated: 2026-08-24
 > re-fused under the new search; the measured before/after is below.
 >
 > This document is the *why*. For the procedure — applying the migration, measuring, re-fusing,
-> fitting the lead band, rolling back — see [`phase-2.2d-runbook.md`](./phase-2.2d-runbook.md).
+> fitting the lead band, rolling back — see [`phase-2.2d-runbook.md`](../runbooks/phase-2.2d-runbook.md).
 
 ## Why
 

@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-23
+updated: 2026-08-30
 ---
 
 # Pothole Detection — Ingestion Server
@@ -15,6 +15,10 @@ updated: 2026-08-23
 | Validation | Pydantic v2 |
 | Storage | Local filesystem (dev) / Supabase Storage (prod) |
 | Container | Docker + docker-compose |
+
+**Documentation:** [`docs/README.md`](./docs/README.md) is the index — architecture, per-phase
+records (including the negative results), runbooks, and research findings.
+[`docs/roadmap.md`](./docs/roadmap.md) is the status table.
 
 ---
 
@@ -112,12 +116,18 @@ curl http://localhost:8000/health
 | `RATE_LIMIT_FRAMES_PER_HOUR` | `5000` | Max frames per device per hour |
 | `MAX_BATCH_SIZE` | `100` | Max events in a single POST batch |
 | `MAX_FRAME_SIZE_BYTES` | `10485760` | Max JPEG size (10 MB) |
-| `DETECTION_ENABLED` | `false` | Server-side detection. Off until a model exists — [runbook](./docs/phase-2.7-runbook.md), [as-built](./docs/phase-2.7-detection-enablement.md) |
+| `DETECTION_ENABLED` | `false` | Server-side detection. Still off: models exist, but adding hand-labelled negatives currently *lowers* recall — [runbook](./docs/runbooks/phase-2.7-runbook.md), [as-built](./docs/phases/phase-2.7-detection-enablement.md), [fix in progress](./docs/phases/phase-2.7b-road-surface-classes.md) |
 | `DETECTION_BACKEND` | `none` | `none` / `onnx` / `http` / `hybrid` |
 | `DETECTION_MODEL_PATH` | _(empty)_ | Path to a **raw** Ultralytics ONNX export (`opset=12 nms=False`); lives in `models/` |
 | `DETECTION_ROI_ENABLED` | `true` | Crop to the road band before inference — uploads are portrait windshield frames that are mostly sky |
+| `DETECTION_CLASS_NAMES` | `pothole` | Comma-separated class map; **position is the `class_id`** and must match the model's `data.yaml`. The decoder refuses to start on a mismatch, because it would mislabel every box |
+| `VLM_BACKEND` | `none` | `ollama` (local, free, no key) / `openrouter` (one key, any hosted VLM) / `claude` / `gemini` / `local_http`. The first, second and last share one stdlib-urllib client, so **no extra install**. Cloud backends upload road imagery to a third party — prefer `ollama` outside research ([why](./docs/phases/phase-2.9-vlm-verification.md)) |
+| `VLM_VERIFY_LOW` / `_HIGH` | `0.40` / `0.75` | Gray zone for the **VLM verifier** only, and **uncalibrated**. **Not** detector thresholds: measured over 340 labelled frames, auto-accept above 0.75 fires on 5 frames of 5,615 (the one labelled frame there is a false positive) and auto-reject below 0.40 discards 55 of the 65 known potholes ([why](./docs/phases/phase-2.9-vlm-verification.md)) |
+| `DETECTION_PRIMARY_CLASS_ID` | `0` | The only class that may set `server_probability`. Fusion blends that scalar with no notion of class, so a confident manhole must not reach it — see [model strategy](./docs/architecture/detection-model-strategy.md) |
 
-Every detection and VLM knob is documented in `.env.example`.
+Every detection and VLM knob is documented in `.env.example`. To measure a VLM against the
+hand-labelled frames before trusting it, use `scripts/vlm_eval.py` (read-only; `--limit`
+defaults to 25 so a first run is a smoke test).
 
 ---
 
@@ -342,13 +352,15 @@ The schema uses **generic asset naming** (per enterprise-architecture-plan.md §
 | `schema_migrations` | Migration ledger — filename, checksum, applied_at (Phase 2.6) |
 | `frame_label` | Human ground truth per frame: 1 pothole / 0 not / -1 unsure (Phase 2.7) |
 
-`asset_observation.sensor_class_probs`, `asset_cluster.class_probs` and `asset_cluster.bearing_deg` (Phase 2.2c, `migrations/011`) carry the class distributions and heading that the spatiotemporal crowd fusion needs; see [`docs/phase-2.2c-spatiotemporal-fusion.md`](./docs/phase-2.2c-spatiotemporal-fusion.md).
+`asset_observation.sensor_class_probs`, `asset_cluster.class_probs` and `asset_cluster.bearing_deg` (Phase 2.2c, `migrations/011`) carry the class distributions and heading that the spatiotemporal crowd fusion needs; see [`docs/phases/phase-2.2c-spatiotemporal-fusion.md`](./docs/phases/phase-2.2c-spatiotemporal-fusion.md).
 
-`fusion_pair.match_cost` and `fusion_pair.is_primary` (Phase 2.2d, `migrations/012`) record which frame the pairing search chose for an observation and why. The search ranks candidates by a lookahead cost rather than by nearest-in-time, because the camera resolves a pothole while it is still ahead of the vehicle; see [`docs/phase-2.2d-pairing-search.md`](./docs/phase-2.2d-pairing-search.md) for the design and [`docs/phase-2.2d-runbook.md`](./docs/phase-2.2d-runbook.md) for the procedure.
+How many detection models the platform runs, and what belongs in each, is a standing architectural decision rather than a per-phase one: road-surface defects are custom-trained and feed fusion, street furniture is pretrained and must never touch `server_probability`, and road markings are a segmentation problem rather than a detection one. See [`docs/architecture/detection-model-strategy.md`](./docs/architecture/detection-model-strategy.md) before adding a detection class.
+
+`fusion_pair.match_cost` and `fusion_pair.is_primary` (Phase 2.2d, `migrations/012`) record which frame the pairing search chose for an observation and why. The search ranks candidates by a lookahead cost rather than by nearest-in-time, because the camera resolves a pothole while it is still ahead of the vehicle; see [`docs/phases/phase-2.2d-pairing-search.md`](./docs/phases/phase-2.2d-pairing-search.md) for the design and [`docs/runbooks/phase-2.2d-runbook.md`](./docs/runbooks/phase-2.2d-runbook.md) for the procedure.
 
 `asset_cluster.org_id` (Phase 2.6, `migrations/009`) is the owning municipality, or `NULL` for
 unowned. It scopes **repair writes** only; reads remain global. See
-[`docs/phase-2.6-hardening.md`](./docs/phase-2.6-hardening.md) §6.
+[`docs/phases/phase-2.6-hardening.md`](./docs/phases/phase-2.6-hardening.md) §6.
 
 All geometry columns use `GEOGRAPHY(POINT, 4326)` with GIST indexes for spatial queries.
 
@@ -544,7 +556,7 @@ Key compatibility guarantees:
   reported in `rejected` while the rest of the batch succeeds. **Schema violations behave
   differently** — Pydantic validates `list[EventPayload]` as a whole, so one out-of-range field
   returns 422 for the entire batch. Keep the field bounds wide enough that real data cannot trip
-  them; see `docs/road-test-readiness.md` §3.
+  them; see `docs/runbooks/road-test-readiness.md` §3.
 - Optional fields (absent vs null) handled correctly — Pydantic treats both as None
 - Duplicate uploads are idempotent (200 response, ID in `accepted`)
 - Client deletion logic: only IDs in `accepted` are deleted from local Room

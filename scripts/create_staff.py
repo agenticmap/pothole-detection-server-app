@@ -1,7 +1,7 @@
 """Provision a staff account (Phase 2.5).
 
 There is deliberately no self-signup endpoint: the staff tier is admin-provisioned
-(see docs/phase-2.4-auth-plan.md). Before this script the only way to create an
+(see docs/phases/phase-2.4-auth-plan.md). Before this script the only way to create an
 account was hand-written SQL, which made the operator dashboard unusable.
 
 Usage:

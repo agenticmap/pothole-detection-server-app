@@ -6,13 +6,13 @@ updated: 2026-08-23
 
 > Status: **In progress.** This first pass landed the startup-path correctness fixes, the
 > container deployment story, and the three security leftovers Phase 2.5 deferred. The
-> throughput/abuse items from [`roadmap.md`](./roadmap.md) §2.8 — shared rate limiter, per-IP
+> throughput/abuse items from [`roadmap.md`](../roadmap.md) §2.8 — shared rate limiter, per-IP
 > limits, frame GC, storage budget, TLS, shadow-ban — are **not** done and remain the bulk of
 > the phase.
 >
-> Companion to [`roadmap.md`](./roadmap.md) §2.8–2.10,
-> [`enterprise-architecture-plan.md`](./enterprise-architecture-plan.md) §4.1 (P2.6), and the
-> "Known gaps" list in [`road-test-readiness.md`](./road-test-readiness.md).
+> Companion to [`roadmap.md`](../roadmap.md) §2.8–2.10,
+> [`enterprise-architecture-plan.md`](../architecture/enterprise-architecture-plan.md) §4.1 (P2.6), and the
+> "Known gaps" list in [`road-test-readiness.md`](../runbooks/road-test-readiness.md).
 
 ## Context
 

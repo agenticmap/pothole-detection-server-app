@@ -4,8 +4,14 @@ onnxruntime + Pillow are imported lazily (only when this backend is constructed)
 so the base server doesn't require them unless detection_backend='onnx'.
 
 Expects an Ultralytics ONNX export with **raw** output [1, 4+nc, N] (post-sigmoid
-class scores, no NMS baked in) — see docs/model-attribution.md for the pinned
-export line. probability = max box confidence after conf-threshold + NMS.
+class scores, no NMS baked in) — see docs/reference/model-attribution.md for the pinned
+export line. probability = the best PRIMARY-class box after conf-threshold + NMS.
+
+Multi-class (Phase 2.7b). `labels` names each class by position and
+`primary_class_id` picks the one that may set `server_probability`. Fusion blends
+that scalar with no notion of class, so a confident manhole must not reach it —
+see `_frame_probability`. A labels/nc mismatch is rejected at construction rather
+than mislabelling every box.
 
 Two Phase 2.7 additions, both driven by the real collected frames:
 
@@ -26,6 +32,7 @@ from __future__ import annotations
 
 import io
 import logging
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -50,7 +57,8 @@ class OnnxYoloDetector:
         roi_enabled: bool = False,
         roi_top: float = 0.0,
         roi_bottom: float = 1.0,
-        label: str = "pothole",
+        labels: Sequence[str] = ("pothole",),
+        primary_class_id: int = 0,
     ):
         import onnxruntime as ort  # lazy — only needed for this backend
 
@@ -61,6 +69,14 @@ class OnnxYoloDetector:
                 f"detection_roi_top/bottom must satisfy 0 <= top < bottom <= 1 "
                 f"(got {roi_top}, {roi_bottom})"
             )
+        labels = tuple(labels)
+        if not labels:
+            raise ValueError("labels must name at least one class")
+        if not 0 <= primary_class_id < len(labels):
+            raise ValueError(
+                f"detection_primary_class_id {primary_class_id} is not a valid index into "
+                f"{len(labels)} class name(s) {labels}"
+            )
         self.model_id = model_id
         self.input_size = input_size
         self.conf_threshold = conf_threshold
@@ -68,9 +84,11 @@ class OnnxYoloDetector:
         self.roi_enabled = roi_enabled
         self.roi_top = roi_top
         self.roi_bottom = roi_bottom
-        self.label = label
+        self.labels = labels
+        self.primary_class_id = primary_class_id
         self._session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         self._input_name = self._session.get_inputs()[0].name
+        self._check_class_count()
 
     def detect(self, jpeg: bytes) -> DetectionResult:
         from PIL import Image
@@ -83,7 +101,7 @@ class OnnxYoloDetector:
         tensor, ratio, (dw, dh) = self._letterbox(roi)
         output = self._session.run(None, {self._input_name: tensor})[0]
         boxes, scores, class_ids = self._postprocess(output)
-        prob = float(scores.max()) if scores.size else 0.0
+        prob = self._frame_probability(scores, class_ids)
 
         detections = [
             self._to_detection(box, score, cls, ratio, dw, dh, offset_y, frame_w, frame_h)
@@ -92,6 +110,70 @@ class OnnxYoloDetector:
         return DetectionResult(
             probability=prob, detections=detections, model_id=self.model_id, version=VERSION
         )
+
+    def _frame_probability(self, scores: np.ndarray, class_ids: np.ndarray) -> float:
+        """The best PRIMARY-class box — not simply the best box.
+
+        Fusion blends this scalar with the sensor verdict and has no notion of class
+        (`app/fusion/service.py` `_CANDIDATE_COLUMNS`), so a confident manhole scored
+        as the frame probability would be read as a confirmed *pothole*. Taking the
+        max across all classes was correct only while nc == 1.
+
+        A frame holding only non-primary boxes scores 0.0, which
+        `NULLIF(server_probability, 0.0)` already reads as *no measurement* → fall
+        back to `device_probability`. That is the intended semantics rather than a
+        gap: "that is a manhole" is not evidence about a pothole in either
+        direction, so it should leave the sensor verdict alone.
+        """
+        if scores.size == 0:
+            return 0.0
+        primary = scores[class_ids == self.primary_class_id]
+        return float(primary.max()) if primary.size else 0.0
+
+    def _label_for(self, class_id: int) -> str:
+        """Class id → name. Out-of-range is unreachable once `_check_layout` passes."""
+        if 0 <= class_id < len(self.labels):
+            return self.labels[class_id]
+        return f"class_{class_id}"
+
+    def _check_class_count(self) -> None:
+        """Reject a labels/nc mismatch at construction, when the export declares its shape.
+
+        A 4-class model loaded with one class name mislabels every box and, worse,
+        scores the wrong class into `server_probability`. `_check_layout` catches it
+        too, but only on the first frame — and `app/detection/service.py` swallows
+        per-frame exceptions into a NULL, so the mismatch would present as
+        "detection silently does nothing, forever". Failing here fails at boot.
+
+        Ultralytics exports non-dynamic by default, so the channel axis is usually a
+        concrete int. When it is not — or when the shape is not a plausible raw
+        `[1, 4+nc, N]` layout — say nothing and leave it to `_check_layout`, which
+        has the actual array.
+        """
+        get_outputs = getattr(self._session, "get_outputs", None)
+        if get_outputs is None:
+            return
+        try:
+            shape = list(get_outputs()[0].shape)
+        except Exception:  # noqa: BLE001 — shape metadata is optional, not load-bearing
+            return
+        if len(shape) != 3:
+            return
+        channels, anchors = shape[1], shape[2]
+        if not isinstance(channels, int) or not isinstance(anchors, int):
+            return
+        if channels < 5 or channels > anchors:
+            return  # not a raw layout at all — _check_layout will say so, with better wording
+        self._assert_class_count(channels)
+
+    def _assert_class_count(self, channels: int) -> None:
+        if channels - 4 != len(self.labels):
+            raise ValueError(
+                f"Model has {channels - 4} class(es) but {len(self.labels)} class name(s) "
+                f"were configured {self.labels}. Every box would be mislabelled and the "
+                f"frame probability could come from the wrong class. Set "
+                f"DETECTION_CLASS_NAMES to the model's data.yaml `names:`, in order."
+            )
 
     # ── Geometry ──────────────────────────────────────────────────────────────
 
@@ -170,7 +252,7 @@ class OnnxYoloDetector:
                 "w": (x2 - x1) / frame_w,
                 "h": (y2 - y1) / frame_h,
             },
-            "label": self.label,
+            "label": self._label_for(int(class_id)),
             "class_id": int(class_id),
             "confidence": float(score),
         }
@@ -213,6 +295,7 @@ class OnnxYoloDetector:
                 f"export ([1, N, 4+nc]) would silently decode to garbage. Re-export with: "
                 f"yolo export model=best.pt format=onnx imgsz={self.input_size} opset=12 nms=False"
             )
+        self._assert_class_count(channels)
 
     def _nms(self, boxes_xywh: np.ndarray, scores: np.ndarray) -> list[int]:
         """Greedy NMS on center-form boxes. Returns kept indices."""

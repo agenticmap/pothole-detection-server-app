@@ -5,7 +5,7 @@ updated: 2026-08-23
 # Enterprise Architecture & Development Plan
 ## Pothole Detection → Municipal Asset Tracking Platform
 
-> Companion document to [`docs/roadmap.md`](./roadmap.md). The roadmap describes the on-device mobile app and its server-side counterpart in broad strokes. This document defines the **enterprise-grade server platform, real-time GIS dashboard, modular fusion-engine integration, and multi-asset extensibility strategy** that the app feeds into, beginning at Phase 2.
+> Companion document to [`docs/roadmap.md`](../roadmap.md). The roadmap describes the on-device mobile app and its server-side counterpart in broad strokes. This document defines the **enterprise-grade server platform, real-time GIS dashboard, modular fusion-engine integration, and multi-asset extensibility strategy** that the app feeds into, beginning at Phase 2.
 >
 > **Scope of this document:** strategy and architecture only. No application code. Backend logic, frontend components, and database queries are intentionally excluded at this stage.
 
@@ -278,7 +278,7 @@ The dashboard is for **municipal operators**: dispatch supervisors, asset manage
 
 > **Implemented in Phase 2.5b.** A PMTiles archive is served from `/basemap` over HTTP range
 > requests, with the style flavour themed from the same CSS tokens as the chrome. See
-> [`phase-2.5b-dashboard-design.md`](./phase-2.5b-dashboard-design.md) §4.
+> [`phase-2.5b-dashboard-design.md`](../phases/phase-2.5b-dashboard-design.md) §4.
 - Protomaps: a single addressable PMTiles archive per province, served from S3/R2 via HTTP range requests. **No basemap tile server needed.** ~30 GB for all of Canada at z0–14.
 - Avoids per-tile Mapbox / MapTiler billing.
 
@@ -329,7 +329,7 @@ This is the single largest deviation from the `pothole_cluster`-named schema in 
 
 ## 4. Phased Implementation Roadmap
 
-This roadmap **extends** [`docs/roadmap.md`](./roadmap.md); it does not replace it. App-side phases (1, 1.5, 1.6, and the on-device portions of 2/3/4) remain authoritative there. This section adds the **server-side, dashboard, and fusion-engine phases** and slots them against the existing mobile timeline.
+This roadmap **extends** [`docs/roadmap.md`](../roadmap.md); it does not replace it. App-side phases (1, 1.5, 1.6, and the on-device portions of 2/3/4) remain authoritative there. This section adds the **server-side, dashboard, and fusion-engine phases** and slots them against the existing mobile timeline.
 
 ### 4.1 Master timeline
 
@@ -441,7 +441,7 @@ The API layer never calls into MATLAB directly. The fusion engine is an internal
 
 > **Status: shipped.** As-built and the deviations
 > from Section 3 (FastAPI `ST_AsMVT` instead of Martin, no materialized views, no CDN, no
-> WebSocket yet) are recorded in [`phase-2.5-dashboard-plan.md`](./phase-2.5-dashboard-plan.md).
+> WebSocket yet) are recorded in [`phase-2.5-dashboard-plan.md`](../phases/phase-2.5-dashboard-plan.md).
 > Phase numbered 2.5, not 2.3 — see the note on §4.1.
 
 Build the GIS dashboard per Section 3.
@@ -614,4 +614,4 @@ At 100k devices: Supabase climbs to ~$1k–3k/mo (per-row Realtime quotas, stora
 
 ---
 
-*End of plan. Companion to [`docs/roadmap.md`](./roadmap.md). The Phase 2.0 schema must be landed **before** the MATLAB port; the fusion-engine interface depends on the asset-observation table layout.*
+*End of plan. Companion to [`docs/roadmap.md`](../roadmap.md). The Phase 2.0 schema must be landed **before** the MATLAB port; the fusion-engine interface depends on the asset-observation table layout.*

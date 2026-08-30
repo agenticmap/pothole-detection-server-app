@@ -12,7 +12,7 @@
 --                           fusion job's scoring step.
 --   - fusion_pair.severity: per-pair severity captured alongside confidence.
 --
--- See docs/phase-2.1-fusion-engine-plan.md for the full design.
+-- See docs/phases/phase-2.1-fusion-engine-plan.md for the full design.
 -- ============================================================================
 
 -- ============================================================================

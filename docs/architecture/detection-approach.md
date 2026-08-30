@@ -1,7 +1,9 @@
 # Detection Approach — why server-side detection is a YOLO → VLM hybrid
 
+> **Scope: this is the pipeline *inside* Model A (road-surface defects).** How many detection models exist at all, and why street furniture and road markings get their own, is a separate decision recorded in [`detection-model-strategy.md`](./detection-model-strategy.md). The short version: only Model A may write `server_probability`, because the fusion blend has no notion of class.
+
 > **Decision record (the "why").** The as-built mechanics live in
-> [`docs/phase-2.3-detection-plan.md`](./phase-2.3-detection-plan.md) §Phase 2.3b.
+> [`docs/phases/phase-2.3-detection-plan.md`](../phases/phase-2.3-detection-plan.md) §Phase 2.3b.
 > This doc explains the choice behind them. Research is mid-2026; numbers are from
 > the sources at the bottom.
 

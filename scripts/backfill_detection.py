@@ -38,6 +38,14 @@ from pathlib import Path
 # Run directly (`python scripts/backfill_detection.py`) without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Windows consoles default to cp1252, and several messages below contain an arrow
+# or an em dash. Without this the script raises UnicodeEncodeError when it prints
+# them -- which on this path means *after* every frame has already been scored.
+# Harmless on POSIX, where stdout is already UTF-8.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
 from app.config import settings  # noqa: E402
 from app.database import create_pool, run_migrations  # noqa: E402
 from app.detection.onnx_v1 import OnnxYoloDetector  # noqa: E402
@@ -104,6 +112,12 @@ def _parse_args() -> argparse.Namespace:
     p.set_defaults(roi=settings.detection_roi_enabled)
     p.add_argument("--roi-top", type=float, default=settings.detection_roi_top)
     p.add_argument("--roi-bottom", type=float, default=settings.detection_roi_bottom)
+    p.add_argument("--classes", default="pothole",
+                   help="comma-separated class names; position is the class_id. Must match "
+                        "the model's data.yaml, or boxes are mislabelled and the frame "
+                        "probability can come from the wrong class")
+    p.add_argument("--primary-class", type=int, default=0,
+                   help="index of the class that sets the frame probability (default 0)")
 
     p.add_argument("--reset-fusion", dest="reset_fusion", action="store_true",
                    help="clear processed_at so fusion re-scores pairs (default)")
@@ -133,6 +147,8 @@ async def main() -> int:
         roi_enabled=args.roi,
         roi_top=args.roi_top,
         roi_bottom=args.roi_bottom,
+        labels=[c.strip() for c in args.classes.split(",") if c.strip()],
+        primary_class_id=args.primary_class,
     )
 
     db = settings.database_url.rsplit("/", 1)[-1]

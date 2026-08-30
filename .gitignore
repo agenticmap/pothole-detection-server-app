@@ -38,6 +38,10 @@ dist/
 node_modules/
 *.tsbuildinfo
 .env.local
+# Backups of .env carry the same secrets it does (the dev JWT private key,
+# among others). `.env` alone does not match `.env.bak-*`, so spell it out.
+.env.bak*
+.env.backup*
 
 # Playwright MCP scratch output
 .playwright-mcp/
@@ -60,3 +64,4 @@ runs/
 *.pt
 .venv-train/
 *.docx
+*.log

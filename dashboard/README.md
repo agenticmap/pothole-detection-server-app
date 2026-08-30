@@ -8,8 +8,8 @@ The municipal operator console for the pothole-detection server (Phase 2.5). Map
 in, see confirmed potholes, open one, look at the camera frames behind it, mark it repaired.
 
 Design rationale, the decisions behind the odd-looking bits, and what is deliberately not
-built live in [`../docs/phase-2.5-dashboard-plan.md`](../docs/phase-2.5-dashboard-plan.md) and
-its successor [`../docs/phase-2.5b-dashboard-design.md`](../docs/phase-2.5b-dashboard-design.md)
+built live in [`../docs/phases/phase-2.5-dashboard-plan.md`](../docs/phases/phase-2.5-dashboard-plan.md) and
+its successor [`../docs/phases/phase-2.5b-dashboard-design.md`](../docs/phases/phase-2.5b-dashboard-design.md)
 (the Organic redesign, the vector basemap, the dock).
 
 **Read those before changing the tile auth, the basemap palette or the severity encoding** — all
@@ -136,7 +136,7 @@ The inventory list, work orders, reports, and any automated frontend tests. The 
 disabled slots for the first three so adding them is additive.
 
 Filters and dark mode **were** built in Phase 2.5b; the basemap is no longer raster OSM. See
-[`docs/phase-2.5b-dashboard-design.md`](../docs/phase-2.5b-dashboard-design.md) for the as-built
+[`docs/phases/phase-2.5b-dashboard-design.md`](../docs/phases/phase-2.5b-dashboard-design.md) for the as-built
 record, including what the dashboard deliberately does *not* claim to know (street names, KPI
 deltas) and why.
 
@@ -216,7 +216,7 @@ the enforcement; the server re-reads `org_member` on every write.
 > sets no `org_id`, *everything the pipeline produces is unowned*, so a plain `staff` operator
 > currently cannot mark real detections repaired. Provision operators who need to as `admin`
 > until the job learns to assign an owner. Full reasoning:
-> [`../docs/phase-2.6-hardening.md`](../docs/phase-2.6-hardening.md) §6.
+> [`../docs/phases/phase-2.6-hardening.md`](../docs/phases/phase-2.6-hardening.md) §6.
 >
 > So when debugging a 403 on repair, check the cluster's `org_id` before assuming it is the role.
 
@@ -291,7 +291,7 @@ that gap is recorded under [Production accounts](#production-accounts).
 **`ops@test.local` can never log in, whatever its password is.** The login route validates with
 Pydantic's `EmailStr`, which rejects the reserved `.local` TLD, so the request 422s before any
 credential check. It predates the fix that made `create_staff.py` validate the same way
-(`docs/phase-2.5-dashboard-plan.md`), and it is safe to delete:
+(`docs/phases/phase-2.5-dashboard-plan.md`), and it is safe to delete:
 
 ```sql
 DELETE FROM org_member WHERE user_id = (SELECT user_id FROM staff_user WHERE email = 'ops@test.local');

@@ -20,5 +20,11 @@ ultralytics==8.3.70
 
 # ONNX export path. Ultralytics calls onnxslim during `yolo export format=onnx`;
 # without it the export still works but ships a larger graph.
-onnx==1.17.0
+#
+# 1.18.0, not 1.17.0: this machine's only usable interpreter is Python 3.13
+# (miniconda; `py -0p` offers just 3.8 and 3.13). onnx did not publish a cp313
+# wheel until 1.18, so 1.17.0 falls back to a source build and dies in cmake.
+# torch/torchvision/ultralytics at the versions above all have cp313 wheels and
+# resolve to the +cu124 CUDA build unchanged.
+onnx==1.18.0
 onnxslim==0.1.48

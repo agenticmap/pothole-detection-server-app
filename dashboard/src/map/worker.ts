@@ -22,7 +22,7 @@
  * markers looks exactly like a map with no data.
  *
  * This is worth stating plainly because it was previously misdiagnosed, and the
- * wrong conclusion was written into docs/phase-2.5-dashboard-plan.md: that
+ * wrong conclusion was written into docs/phases/phase-2.5-dashboard-plan.md: that
  * MapLibre's `addProtocol` "does not work for vector tiles" because the worker
  * never consults the main thread. It does — MapLibre's own docs describe workers
  * delegating unknown protocols to the main thread, and PMTiles is their canonical

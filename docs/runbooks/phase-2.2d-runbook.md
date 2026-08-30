@@ -5,7 +5,7 @@ updated: 2026-08-24
 # Runbook — the pairing search
 
 Procedure only. For *why* the search is shaped this way, read
-[`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md).
+[`phase-2.2d-pairing-search.md`](../phases/phase-2.2d-pairing-search.md).
 
 Every command runs **from the repo root**, and every one of them needs `DATABASE_URL` pointing at
 the database you mean. There is no interactive confirmation on most of these.

@@ -1,7 +1,7 @@
 # Phase 2.1 — Sensor Classification + Fusion Engine v1 (As-Built)
 
-> Status: **Implemented.** Companion to [`docs/roadmap.md`](./roadmap.md) §2.4 and
-> [`docs/enterprise-architecture-plan.md`](./enterprise-architecture-plan.md) §4.3. This is the
+> Status: **Implemented.** Companion to [`docs/roadmap.md`](../roadmap.md) §2.4 and
+> [`docs/architecture/enterprise-architecture-plan.md`](../architecture/enterprise-architecture-plan.md) §4.3. This is the
 > ported, server-side realization of the original MATLAB accelerometer-classification research,
 > feeding a sensor↔visual fusion engine.
 

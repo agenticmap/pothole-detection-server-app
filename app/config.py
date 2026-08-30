@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # separation (the lead) and a NEGATIVE delta_ms (frame before event) — not the
     # delta=0/dist=0 that the pre-2.2d ranking preferred. Re-ranking the existing
     # candidates in pothole_db changed the winner for 713 of 2197 frames (32.5%).
-    # See docs/phase-2.2d-pairing-search.md.
+    # See docs/phases/phase-2.2d-pairing-search.md.
     # false restores the pre-2.2d RANKING, not the pre-2.2d windows: it still uses
     # fusion_window_m and a fixed fusion_window_ms_max, because fusion_window_ms no
     # longer exists. For a byte-exact revert also set FUSION_WINDOW_M=25 and
@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     # Cluster identity (paper §4.4). A new group only merges into an existing cluster
     # when their headings agree, so opposing carriageways stay separate defects.
     # Android's bearing accuracy is not on the wire yet, so this is a fixed tolerance
-    # rather than the paper's ±2σ; see docs/app-capture-findings.md F3.
+    # rather than the paper's ±2σ; see docs/research/app-capture-findings.md F3.
     cluster_bearing_tolerance_deg: float = 45.0
     cluster_bearing_aware: bool = True
 
@@ -204,6 +204,13 @@ class Settings(BaseSettings):
     detection_disagreement_threshold: float = 0.3  # |device − server| above this → logged
     detection_http_timeout: float = 30.0           # per-frame timeout (backend=http)
 
+    # Class map (Phase 2.7b). Comma-separated; position IS the class_id, so order
+    # must match the model's data.yaml `names:` exactly. Only the primary class may
+    # set server_probability: fusion blends that number with no notion of class, so
+    # a confident manhole reaching it would be read as a confirmed pothole.
+    detection_class_names: str = "pothole"
+    detection_primary_class_id: int = 0
+
     # ROI crop (Phase 2.7). Uploaded frames are 480x640 portrait windshield shots:
     # sky and trees fill the top half and the hood the bottom ~15%, so letterboxing
     # the whole frame spends most of the 640px budget where a pothole cannot be.
@@ -226,11 +233,18 @@ class Settings(BaseSettings):
     vlm_max_calls_per_run: int = 50                # per-detection-run cap on VLM calls (cost bound)
 
     # ── Pluggable VLM verifier (provider-agnostic: cloud + local) ───────────────
-    vlm_backend: str = "none"                      # "none" | "claude" | "gemini" | "local_http"
+    # openrouter/ollama/local_http all speak the same OpenAI-compatible wire format
+    # and share one client; they differ only in the default URL and whether a key is
+    # required. vlm_http_url overrides the default for any of them.
+    # "none"|"claude"|"gemini"|"openrouter"|"ollama"|"local_http"
+    vlm_backend: str = "none"
     vlm_model_id: str = ""                         # provider model id; backend defaults if empty
-    vlm_api_key: str = ""                          # cloud API key (claude/gemini)
-    vlm_http_url: str = ""                         # OpenAI-compatible endpoint (local_http)
+    vlm_api_key: str = ""                          # cloud API key (claude/gemini/openrouter)
+    vlm_http_url: str = ""                         # overrides the backend's default endpoint
     vlm_timeout: float = 30.0                      # per-call timeout (seconds)
+    vlm_json_mode: bool = True                     # response_format=json_object; off if rejected
+    vlm_http_referer: str = ""                     # OpenRouter attribution header (HTTP-Referer)
+    vlm_http_title: str = ""                       # OpenRouter attribution header (X-Title)
 
     # ── Auth — city-staff tier (Phase 2.4) ──────────────────────────────────────
     # The anonymous device tier is unaffected by any of these. They gate ONLY the
@@ -252,6 +266,11 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """Parse comma-separated CORS origins into a list."""
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def detection_class_name_list(self) -> list[str]:
+        """Parse comma-separated detection class names into a list. Index = class_id."""
+        return [c.strip() for c in self.detection_class_names.split(",") if c.strip()]
 
 
 settings = Settings()

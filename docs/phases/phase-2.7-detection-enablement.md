@@ -22,7 +22,7 @@ The data said otherwise. Three findings reframed the work:
 **0 of 2916** with a `server_probability` or `detected_at`: server-side detection had never run
 on a single frame. `asset_observation.visual_confirmed` — the only ground-truth slot in the
 schema — was NULL on all 2728 rows, and `model_disagreement`, which
-[`detection-approach.md`](./detection-approach.md) nominates as "the natural place to mine
+[`detection-approach.md`](../architecture/detection-approach.md) nominates as "the natural place to mine
 tuning examples", had 0 rows and could not have had any.
 
 **2. The on-device signal is close to noise on this data.** Median `device_probability` 0.118,
@@ -83,8 +83,18 @@ whether the crop ran. `_to_detection` takes the offset explicitly for that reaso
 crop on and off to pin the difference — forgetting the offset hop would shift every box up by
 288 px, silently.
 
-The default is a hypothesis, not a finding. `scripts/detect_eval.py --roi / --no-roi` reports
-both against the labelled set so the default can be settled with evidence.
+~~The default is a hypothesis, not a finding.~~ **Settled 2026-08-25: the crop wins, keep it on.**
+Measured against 340 definite labels with `yolo11s_pothole_v1`, at both detector thresholds:
+
+| geometry | best F1 | at detector `--conf` |
+|---|---|---|
+| **ROI on (0.45–0.90)** | **0.382** | 0.05 |
+| ROI off | 0.315 | 0.05 |
+| ROI on | 0.279 | 0.25 |
+| ROI off | 0.242 | 0.25 |
+
+The crop is worth about +0.07 F1 at matched settings, in the direction the pixel-count argument
+predicted. `DETECTION_ROI_ENABLED` stays `true`.
 
 ### 3. `server_detections` now matches `device_detections`
 
@@ -215,7 +225,7 @@ with `DETECTION_BACKEND=none` is caught by the same path.
 ## What is left, and what it needs
 
 Only the steps a model unblocks. The copy-pasteable version of the list below, with expected
-output and a troubleshooting table, is [`phase-2.7-runbook.md`](./phase-2.7-runbook.md). In
+output and a troubleshooting table, is [`phase-2.7-runbook.md`](../runbooks/phase-2.7-runbook.md). In
 order:
 
 1. **Get a Stage-1 model.** Fastest: a pretrained single-class pothole ONNX from Roboflow
@@ -227,7 +237,7 @@ order:
 5. **Measure and choose a threshold:** `detect_eval.py --labels`, with and without `--roi`.
    Record both tables here, plus the chosen `DETECTION_CONF_THRESHOLD` and why.
 6. **Turn it on:** `DETECTION_ENABLED=true`, `DETECTION_BACKEND=onnx`, `DETECTION_MODEL_PATH`,
-   a versioned `DETECTION_MODEL_ID`; fill in `docs/model-attribution.md`'s weights rows.
+   a versioned `DETECTION_MODEL_ID`; fill in `docs/reference/model-attribution.md`'s weights rows.
 
 ### Fine-tuning recipe (runs outside this repo)
 
@@ -257,6 +267,213 @@ Report mAP50 / mAP50-95 on the archive's own 534-image test split, and label it 
 metrics, kept separate from the real-frame numbers. They measure different distributions and
 conflating them is how the false positives above would get missed.
 
+## Measured: the first real model, and why it is not enabled
+
+`yolo11s_pothole_v1` (see [`model-attribution.md`](../reference/model-attribution.md)) scored against 375 hand
+labels — 65 pothole, 275 not, 35 unsure — on 2026-08-25. Sweeping the *frame* threshold with the
+detector's own box threshold at 0.05:
+
+| thresh | TP | FP | FN | prec | recall | F1 |
+|---|---|---|---|---|---|---|
+| 0.05 | 46 | 130 | 19 | 0.261 | 0.708 | **0.382** |
+| 0.10 | 34 | 93 | 31 | 0.268 | 0.523 | 0.354 |
+| 0.20 | 23 | 58 | 42 | 0.284 | 0.354 | 0.315 |
+| 0.25 | 18 | 46 | 47 | 0.281 | 0.277 | 0.279 |
+| 0.40 | 10 | 30 | 55 | 0.250 | 0.154 | 0.190 |
+| 0.55 | 5 | 8 | 60 | 0.385 | 0.077 | 0.128 |
+| 0.60 | 2 | 2 | 63 | 0.500 | 0.031 | 0.058 |
+
+Three things to read off this, in order of how much they matter.
+
+**1. Precision is flat.** It sits at 0.25–0.29 across the entire usable range and only rises where
+recall has collapsed below 8%. Raising the threshold discards true and false positives at the same
+rate, so the score barely ranks correctness. Against a base rate of 65/340 = 0.191 that is a lift
+of roughly 1.4×: real, but weak.
+
+**2. It still beats the phone, which is the relevant comparison.** The same sweep over
+`device_probability` on the same labels gives precision 0.204–0.229 at *every* threshold against a
+base rate of 0.204 — a lift of essentially 1.0. The on-device model's confidence carries almost no
+information. So `COALESCE(server_probability, device_probability)` would be an upgrade.
+
+**3. But it must not be switched on as-is, and the reason is arithmetic, not accuracy.** The model
+returns **exactly 0.0** on 305 of 375 frames (81%) — no box above threshold. `logit` clamps 0.0 to
+1e-6, i.e. −13.8155, which the blend reads as near-certain evidence *against* a pothole:
+
+| `p_sensor` | `p_visual` | fused |
+|---|---|---|
+| 0.90 | 0.5 | 0.7500 |
+| 0.90 | 0.26 | 0.6401 |
+| 0.90 | **0.0** | **0.0030** |
+| 0.52 | **0.0** | **0.0010** |
+| 1.00 | **0.0** | **0.5000** |
+
+A confident sensor pothole fused with a silent camera lands at 0.003. The `p_s = 1.0` row is worth
+staring at: the two clamps are equal and opposite, so they cancel to *exactly* 0.5 — the value the
+member gate's floor sits on.
+
+The bug is the semantics of zero. A detector that finds no box has **not** observed the absence of a
+pothole; it may not even have had road in the ROI. That is a missing modality, not negative
+evidence, and it should reach the engine as `None` — which the engine already handles — rather than
+as 0.0. Fixing that is a precondition for `DETECTION_ENABLED=true`, and it interacts with the
+missing-modality shrinkage recorded in `phase-2.2d-pairing-search.md`, so the two want doing
+together.
+
+**The cheapest accuracy win is now available and was not before.** The 275 frames labelled *not a
+pothole* are domain-matched negatives — real windshield, real night, real rain — and the training
+archive contains **zero** background images. That was named in `model-attribution.md` as the
+likeliest source of false positives, and false positives are exactly what the flat precision column
+is made of.
+
+### Mining the negatives: the v2 dataset, and the baseline it must beat
+
+`scripts/export_labeled_frames.py` turns the hand-labelled `not a pothole` frames into YOLO background
+images (an image with an empty label file). It exports **only** negatives: `frame_label` records a
+verdict per frame, not a box, and a detector cannot learn a positive without coordinates. That is
+convenient rather than limiting, because it leaves all 65 positives free for evaluation.
+
+Of 275 negatives, **200 went to training and 75 are held out**, split on `md5(client_id)` so the
+assignment is stable across re-runs — `hash()` is salted per process and would leak holdout frames
+into training on the second pass. Backgrounds are **ROI-cropped** to 0.45–0.90, matching what the
+detector is actually fed at inference. `detect_eval.py --exclude-ids` consumes the training list.
+
+The v2 dataset (`_pothole-training-v2`) hardlinks the 5322 archive images, so it costs no disk and
+leaves v1 byte-identical and reproducible; the only real files in it are the `neg-*` backgrounds.
+Ultralytics confirms the composition: `3928 images, 200 backgrounds, 0 corrupt` — **5.1% background**,
+against the ~10% its own guidance suggests.
+
+**The baseline v2 has to beat**, `yolo11s_pothole_v1` on the 140-frame holdout (65 pothole, 75 not):
+
+| thresh | TP | FP | FN | prec | recall | F1 |
+|---|---|---|---|---|---|---|
+| 0.05 | 46 | 35 | 19 | 0.568 | 0.708 | **0.630** |
+| 0.15 | 28 | 19 | 37 | 0.596 | 0.431 | 0.500 |
+| 0.25 | 18 | 9 | 47 | 0.667 | 0.277 | 0.391 |
+| 0.55 | 5 | 1 | 60 | 0.833 | 0.077 | 0.141 |
+
+> **Do not compare these numbers to the 340-frame table above.** Precision looks far better — 0.568
+> against 0.261 at the same threshold — purely because moving 200 negatives into training raised the
+> holdout's base rate from 65/340 = 0.191 to 65/140 = 0.464. The like-for-like measure is **lift over
+> base rate**: 1.37× on the full set, 1.22× here. Compare v2 to *this* table, and prefer lift to raw
+> precision.
+>
+> The holdout is also small: 65 positives and 81 predictions at threshold 0.05 put roughly ±6
+> percentage points on recall and ±5 on precision, so only sizeable movements mean anything. Both
+> sides of this tension — 5.1% backgrounds is thin, and a 75-negative holdout is noisy — are fixed by
+> the same thing, and it is not a code change: **2541 of the 2916 frames are still unlabelled.**
+
+### v2: the negatives worked, and the crop choice spoiled the experiment
+
+`yolo11s_pothole_v2` = v1's recipe on the v2 dataset (200 ROI-cropped backgrounds added), 80
+epochs, 4.57 h. Measured on the same 140-frame holdout, at detector `--conf 0.05`, frame
+threshold 0.05:
+
+| model | geometry | TP | FP | prec | recall | F1 | lift over base |
+|---|---|---|---|---|---|---|---|
+| v1 | ROI on | 46 | 35 | 0.568 | 0.708 | **0.630** | 1.22x |
+| v2 | ROI on | 28 | 11 | **0.718** | 0.431 | 0.538 | **1.55x** |
+| v2 | ROI off | 36 | 18 | 0.667 | 0.554 | 0.605 | 1.44x |
+
+**The backgrounds did their job**: false positives fell 35 -> 11, a 69% cut, and precision lift went
+1.22x -> 1.55x. That is the effect they were mined for.
+
+**But 39% of the true positives went with them** (46 -> 28), and F1 fell. The cause is a mistake in
+how the negatives were exported, not in the idea:
+
+- v2 on the **archive** test split is P 0.621 / mAP50 0.494, against v1's 0.623 / 0.512 — the same
+  model, statistically speaking. Its ability to detect potholes in full images is intact.
+- The recall collapse appears **only** on real frames with the ROI crop applied, and switching the
+  crop off at inference recovers most of it (0.431 -> 0.554).
+- For v1 the crop was clearly *better* (F1 0.382 vs 0.315). For v2 the preference **reverses**.
+
+That reversal is the tell. The backgrounds were ROI-cropped and the archive positives were not, so
+crop geometry correlated perfectly with class and the model took the shortcut: an ROI-shaped input
+is background. Cropping to match inference was the right instinct applied to only one class, which
+turned it into a label leak.
+
+**The fix is the v3 dataset**: identical in every respect except that the negatives are exported
+uncropped (`export_labeled_frames.py --no-roi`), so geometry carries no class signal and only content
+differs. The train/holdout split is byte-identical to v2's — it is derived from `md5(client_id)` —
+so v3's numbers drop straight into the table above.
+
+The general lesson is worth keeping: **any preprocessing applied to one class and not the other is a
+label, however sensible it looks in isolation.**
+
+### v3: the crop confound was real and is fixed -- and it was not the cause
+
+`yolo11s_pothole_v3` = v2's dataset with the negatives exported **uncropped**, so geometry no
+longer predicts class. 80 epochs, 2.50 h, clean (`PIN_MEMORY=false`; see the runbook). Same
+140-frame holdout, detector `--conf 0.05`, frame threshold 0.05:
+
+| model | geometry | TP | FP | prec | recall | F1 | lift over base (0.464) |
+|---|---|---|---|---|---|---|---|
+| v1 | ROI on | 46 | 35 | 0.568 | **0.708** | **0.630** | 1.22x |
+| v2 | ROI on | 28 | 11 | 0.718 | 0.431 | 0.538 | 1.55x |
+| v2 | ROI off | 36 | 18 | 0.667 | 0.554 | 0.605 | 1.44x |
+| v3 | ROI on | 23 | 8 | **0.742** | 0.354 | 0.479 | **1.60x** |
+| v3 | ROI off | 14 | 7 | 0.667 | 0.215 | 0.326 | 1.44x |
+
+**The crop hypothesis was half right.** It predicted two things. The first held: v2 preferred ROI
+*off* (0.605 vs 0.538) while v1 and now v3 prefer ROI *on* (0.479 vs 0.326). Removing the crop from
+the negatives restored the normal geometry preference, so the label leak was real and is gone.
+
+**The second prediction failed.** Recall did not recover -- it fell further, 0.708 -> 0.431 -> 0.354.
+So the crop never caused the recall loss. **The negatives themselves do.**
+
+The likely mechanism, and it is worth stating because it inverts the intuition: v2's crop gave the
+model a *shortcut*. It could satisfy the background class on geometry alone and never had to learn
+what the pixels meant. v3 removed the shortcut, so it actually learned the content lesson -- and the
+content lesson is harmful, because these negatives are **hard** negatives. They are manholes, tar
+seals and patches: dark, roughly pothole-shaped, on road surface. Teaching "this is background"
+generalises to suppressing real potholes that look like them. v3 is *better trained* on the same
+data and *worse at recall* for exactly that reason.
+
+**This confirms the labelling concern** raised when the manholes were marked `0`: the marking was
+correct for a single-class `pothole` detector, but the resulting hard negatives cost recall. The
+fix is not to relabel them as potholes -- it is to stop collapsing "clean asphalt" and "uneven
+manhole" into one class.
+
+`frame_label.note` was added here to record which is which, but it landed *after* these 375 labels
+were made, so **every existing note is NULL** and the manholes cannot be found by query. Phase 2.7b
+adds a box-review pass (`label_frames.py --box`) which is how they get identified; the note field
+starts paying off from the next verdict session onward. See
+[`phase-2.7b-road-surface-classes.md`](./phase-2.7b-road-surface-classes.md).
+
+**What each model is actually good for.** The trade is monotone: every negative added buys
+precision and costs more recall than it buys. By F1, **v1 is still the best model**. But F1 is the
+wrong metric for this pipeline. Fusion consumes the visual term as a *modifier* on a sensor verdict,
+and since `_CANDIDATE_COLUMNS` now reads a 0.0 as "no measurement" rather than "clean road",
+**silence costs nothing new** -- to be precise, it falls back to `device_probability`, which is
+exactly what fusion uses today, so a silent detector leaves `fused_confidence` unchanged from the
+status quo rather than being literally "no evidence". Under that objective a detector that rarely
+speaks but is right when it does beats a noisy one, and v3 dominates:
+
+| threshold | v3 TP | v3 FP | precision |
+|---|---|---|---|
+| 0.25 | 10 | 1 | 0.909 |
+| 0.30 | 8 | 0 | **1.000** |
+
+Eight true positives and zero false positives is a usable confirmation signal. Note the sample size
+before over-reading it: 8 detections put the 95% lower bound on that 1.000 near 0.63.
+
+**v3 does not merely trade recall for precision against v1 -- it dominates it.** Matched on true
+positives caught, v3 always pays fewer false positives:
+
+| TP caught | recall | v1 thr | v1 FP | v1 prec | v3 thr | v3 FP | v3 prec |
+|---|---|---|---|---|---|---|---|
+| 23 | 0.354 | 0.20 | 12 | 0.657 | 0.05 | 8 | 0.742 |
+| 14 | 0.215 | 0.35 | 8 | 0.636 | 0.15 | 4 | 0.778 |
+| 10 | 0.154 | 0.40 | 6 | 0.625 | 0.25 | 1 | 0.909 |
+| 8 | 0.123 | 0.45 | 4 | 0.667 | 0.30 | **0** | **1.000** |
+| 5 | 0.077 | 0.55 | 1 | 0.833 | 0.35 | **0** | **1.000** |
+
+v1's only real advantage is that it can *reach* recall above 0.354, which v3 cannot at any
+threshold. Below that ceiling there is no operating point where v1 is preferable.
+
+The practical consequence, over the 140-frame holdout: **v1 at its best-F1 threshold injects an
+opinion on 58% of frames and is wrong about 43% of the time it speaks. v3 at 0.30 speaks on 5.7%
+and was wrong zero times.** Since fusion can only be moved by a frame the detector speaks on, that
+is the difference between adding noise to most pairs and adding signal to a few.
+
 ## Deliberately not in this phase
 
 - **The VLM verifier.** `hybrid_v1.py` is built and now has crop coverage, but
@@ -271,7 +488,7 @@ conflating them is how the false positives above would get missed.
 - App-side camera geometry. The portrait, sky-heavy framing is an app-repo concern; §2 works
   around it server-side. What the collected data says about the capture path — and the
   recommended Phase 2.8 — is written up in
-  [`app-capture-findings.md`](./app-capture-findings.md).
+  [`app-capture-findings.md`](../research/app-capture-findings.md).
 - 59 orphaned JPEGs under `storage/frames` with no `asset_frame` row, and 425 `demo-dev-*` files
   from `seed_demo.py` sharing the real storage root.
 - Phase 2.6's remaining bulk, none of which is detection: shared rate limiter, per-IP limits,

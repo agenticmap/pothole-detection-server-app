@@ -2,7 +2,7 @@
 -- Pothole Detection Platform — pairing search (Phase 2.2d)
 -- ============================================================================
 -- Additive, idempotent. Supports the lookahead-aware pairing search described in
--- docs/phase-2.2d-pairing-search.md.
+-- docs/phases/phase-2.2d-pairing-search.md.
 --
 -- Two columns:
 --

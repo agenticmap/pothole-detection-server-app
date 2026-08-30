@@ -24,6 +24,8 @@ def _build_detector(backend: str) -> FrameDetector | None:
             roi_enabled=settings.detection_roi_enabled,
             roi_top=settings.detection_roi_top,
             roi_bottom=settings.detection_roi_bottom,
+            labels=settings.detection_class_name_list,
+            primary_class_id=settings.detection_primary_class_id,
         )
     if backend == "http":
         from app.detection.http_v1 import HttpDetector

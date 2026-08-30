@@ -151,7 +151,28 @@ _CANDIDATE_COLUMNS = """
         o.client_id AS event_client_id,
         -- Prefer the server detector's probability (Phase 2.3) when present;
         -- fall back to the on-device probability for not-yet-detected frames.
-        COALESCE(f.server_probability, f.device_probability) AS visual_confidence,
+        --
+        -- NULLIF(..., 0.0) is load-bearing. A detector that finds no box above its
+        -- confidence threshold reports probability 0.0 (onnx_v1.py: `scores.max() if
+        -- scores.size else 0.0`), and `logit` clamps 0.0 to 1e-6 = -13.8155, which the
+        -- blend reads as near-certain evidence AGAINST a pothole: a sensor event at
+        -- p_s=0.9 fuses to 0.0030, and at p_s=1.0 the two clamps cancel to exactly
+        -- 0.5000 -- the value the member gate's floor sits on. Measured on
+        -- yolo11s_pothole_v1, which returns 0.0 on 81% of real frames.
+        --
+        -- Finding no box is not an observation that the road is clean; the ROI may hold
+        -- no road at all. That is a MISSING modality, and this file already has the
+        -- right behaviour for it one layer up -- detection/service.py leaves
+        -- server_probability NULL when scoring *fails*, precisely so fusion falls back
+        -- to the device probability. This makes "scored, found nothing" behave the same
+        -- way, which is the only reading under which enabling DETECTION_ENABLED does
+        -- not rewrite every fused_confidence downward.
+        --
+        -- The 0.0 stays in the column: it is the honest record of what the detector
+        -- returned, `count(server_probability)` still counts scored frames, and
+        -- server_detections = '[]' distinguishes it from a failure.
+        COALESCE(NULLIF(f.server_probability, 0.0), f.device_probability)
+            AS visual_confidence,
         o.magnitude, o.accel_std, o.gbar_in_max, o.speed_mps,
         o.sensor_p_pothole, o.sensor_severity,
         EXTRACT(EPOCH FROM (f.ts_utc - o.ts_utc)) AS delta_s,
@@ -603,6 +624,14 @@ members AS (
         0.0 AS severity,
         NULL::double precision AS bearing_deg,
         NULL::jsonb AS sensor_class_probs,
+        -- Deliberately NOT NULLIF'd, unlike _CANDIDATE_COLUMNS above. There the
+        -- question is "how much should the camera move a verdict the accelerometer
+        -- already made", so finding no box is missing evidence and must fall back.
+        -- Here the frame IS the whole claim -- this arm exists to admit a pothole
+        -- nobody drove over -- so a detector that found nothing must disqualify it
+        -- outright, and 0.0 >= $5 already does that. Substituting the device
+        -- probability would resurrect a frame the server model saw nothing in, on the
+        -- strength of an on-device number measured at ~1.0x lift over base rate.
         COALESCE(fr.server_probability, fr.device_probability) AS confidence,
         'frame' AS kind
     FROM asset_frame fr

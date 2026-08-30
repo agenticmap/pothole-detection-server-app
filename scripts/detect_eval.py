@@ -41,6 +41,14 @@ from pathlib import Path
 # Run directly (`python scripts/detect_eval.py`) without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# Windows consoles default to cp1252, and several messages below contain an arrow
+# or an em dash. Without this the script raises UnicodeEncodeError when it prints
+# them -- which on this path means *after* every frame has already been scored.
+# Harmless on POSIX, where stdout is already UTF-8.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
 from app.config import settings  # noqa: E402
 from app.database import create_pool  # noqa: E402
 from app.detection.onnx_v1 import OnnxYoloDetector  # noqa: E402
@@ -77,6 +85,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--dir", help="score JPEGs under this directory instead of querying the DB")
     p.add_argument("--annotate", help="write annotated JPEGs to this directory")
     p.add_argument("--labels", action="store_true", help="only labelled frames; print metrics")
+    p.add_argument("--exclude-ids",
+                   help="file of client_ids (one per line) to skip -- use the training "
+                        "list from export_labeled_frames.py to keep evaluation honest")
     p.add_argument("--conf", type=float, default=0.25, help="detector confidence threshold")
     p.add_argument("--iou", type=float, default=0.45, help="NMS IoU threshold")
     p.add_argument("--input-size", type=int, default=640)
@@ -89,6 +100,12 @@ def _parse_args() -> argparse.Namespace:
     p.set_defaults(roi=True)
     p.add_argument("--roi-top", type=float, default=0.45)
     p.add_argument("--roi-bottom", type=float, default=0.90)
+    p.add_argument("--classes", default="pothole",
+                   help="comma-separated class names; position is the class_id. Must match "
+                        "the model's data.yaml, or boxes are mislabelled and the frame "
+                        "probability can come from the wrong class")
+    p.add_argument("--primary-class", type=int, default=0,
+                   help="index of the class that sets the frame probability (default 0)")
     return p.parse_args()
 
 
@@ -102,6 +119,8 @@ def _build_detector(args: argparse.Namespace) -> OnnxYoloDetector:
         roi_enabled=args.roi,
         roi_top=args.roi_top,
         roi_bottom=args.roi_bottom,
+        labels=[c.strip() for c in args.classes.split(",") if c.strip()],
+        primary_class_id=args.primary_class,
     )
 
 
@@ -129,8 +148,23 @@ async def _frames_from_db(args: argparse.Namespace) -> list[dict]:
     finally:
         await pool.close()
 
+    # Frames that went into a model's training set must not also score it. The list
+    # comes from scripts/export_labeled_frames.py, which exports the reviewed frames
+    # as background images -- so without this the retrained model would be measured
+    # partly on its own training data and every precision gain would be leakage.
+    excluded = set()
+    if getattr(args, "exclude_ids", None):
+        excluded = {
+            line.strip()
+            for line in Path(args.exclude_ids).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        print(f"excluding {len(excluded)} training frame(s) from {args.exclude_ids}")
+
     frames = []
     for r in rows:
+        if r["client_id"] in excluded:
+            continue
         try:
             path = resolve_local_frame_path(r["jpeg_url"])
         except Exception as e:  # noqa: BLE001 — a missing file is data, not a crash

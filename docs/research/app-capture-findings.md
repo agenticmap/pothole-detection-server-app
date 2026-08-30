@@ -5,7 +5,7 @@ updated: 2026-08-23
 # What 2916 real frames say about the capture side
 
 Findings from analysing the first two collection drives, gathered while building Phase 2.7
-([`phase-2.7-detection-enablement.md`](./phase-2.7-detection-enablement.md)). **None of these are
+([`phase-2.7-detection-enablement.md`](../phases/phase-2.7-detection-enablement.md)). **None of these are
 server bugs.** They are capture-side, they explain most of the detection difficulty, and several
 are cheap to fix.
 
@@ -60,7 +60,7 @@ inherits that.
 > tie-break. What remains is that quantisation still adds up to ±500 ms of noise to that residual.
 > This finding is still worth the app-side fix — which shipped — but it is no longer the dominant
 > source of arbitrary pairings. See
-> [`phase-2.2d-pairing-search.md`](./phase-2.2d-pairing-search.md).
+> [`phase-2.2d-pairing-search.md`](../phases/phase-2.2d-pairing-search.md).
 
 **Fix — done.** `PotholeApi.iso8601` now formats `.SSS`; Room already held epoch millis
 (`tsUtcMs`), so the precision existed and was being discarded only at serialization. Pinned by
@@ -208,7 +208,7 @@ model is confounded by a parameter the server cannot see.
 1. **Coverage.** The server cannot distinguish "this street was surveyed and found clean" from
    "never surveyed". That is the difference between a defensible municipal report and a dot map.
 2. **Negatives.** The training archive contains **zero background images** — all 5322 contain a
-   pothole (see [`model-attribution.md`](./model-attribution.md)) — so the model has never been
+   pothole (see [`model-attribution.md`](../reference/model-attribution.md)) — so the model has never been
    shown what a *non*-pothole road looks like. That is the most likely cause of the false positives
    found on real frames: manhole covers, painted crosswalk markings, rain on glass. Surveyed-and-
    clean frames **are** the negatives, and the app is the only thing that knows which frames those

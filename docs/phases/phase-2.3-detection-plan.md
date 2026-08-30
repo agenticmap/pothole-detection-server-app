@@ -7,10 +7,10 @@
 > [`phase-2.7-detection-enablement.md`](./phase-2.7-detection-enablement.md). Two claims
 > below are corrected there: `server_detections` now uses the device's box shape, and
 > "re-fusing frames detected after they were already paired" is done.
-> Companion to [`docs/roadmap.md`](./roadmap.md) §2.3 and follows
-> [`docs/phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md).
+> Companion to [`docs/roadmap.md`](../roadmap.md) §2.3 and follows
+> [`docs/phases/phase-2.2b-read-path-plan.md`](./phase-2.2b-read-path-plan.md).
 > For *why* server detection is a YOLO → VLM hybrid (the decision + research), see
-> [`docs/detection-approach.md`](./detection-approach.md).
+> [`docs/architecture/detection-approach.md`](../architecture/detection-approach.md).
 
 ## Context
 
@@ -71,7 +71,7 @@ This is **server-internal** — no wire-contract change. The Android client neve
 | `DETECTION_INTERVAL_MINUTES` | `2` | poll cadence (shorter than fusion's 5) |
 | `DETECTION_DISAGREEMENT_THRESHOLD` | `0.3` | `|device − server|` above this → logged |
 
-You supply the model (see `docs/model-attribution.md`).
+You supply the model (see `docs/reference/model-attribution.md`).
 
 ## Verification
 

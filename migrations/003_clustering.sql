@@ -8,7 +8,7 @@
 -- exist from 001 — they were scaffolded empty for this phase. This migration
 -- only adds the indexes and the audit table that the clustering job needs.
 --
--- See docs/phase-2.2-clustering-plan.md for the full design.
+-- See docs/phases/phase-2.2-clustering-plan.md for the full design.
 -- ============================================================================
 
 -- ============================================================================
