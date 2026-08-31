@@ -124,6 +124,18 @@ curl http://localhost:8000/health
 | `VLM_BACKEND` | `none` | `ollama` (local, free, no key) / `openrouter` (one key, any hosted VLM) / `claude` / `gemini` / `local_http`. The first, second and last share one stdlib-urllib client, so **no extra install**. Cloud backends upload road imagery to a third party — prefer `ollama` outside research ([why](./docs/phases/phase-2.9-vlm-verification.md)) |
 | `VLM_VERIFY_LOW` / `_HIGH` | `0.40` / `0.75` | Gray zone for the **VLM verifier** only, and **uncalibrated**. **Not** detector thresholds: measured over 340 labelled frames, auto-accept above 0.75 fires on 5 frames of 5,615 (the one labelled frame there is a false positive) and auto-reject below 0.40 discards 55 of the 65 known potholes ([why](./docs/phases/phase-2.9-vlm-verification.md)) |
 | `DETECTION_PRIMARY_CLASS_ID` | `0` | The only class that may set `server_probability`. Fusion blends that scalar with no notion of class, so a confident manhole must not reach it — see [model strategy](./docs/architecture/detection-model-strategy.md) |
+| `SENSOR_OUTLIER_FEATURES` | `accel_std,speed_mps` | Features the IsolationForest outlier gate is fitted on. **Class-neutral by design** — fitted on `ratio`/`gbar`/`magnitude` the gate learns "pothole" and reports it as "outlier", which flagged 285 of 286 and starved the crowd pipeline to one row ([record](./docs/phases/integration-round-2026-08.md)) |
+| `SEVERITY_SCALE` | `0.25` | `severity = clamp(scale × magnitude / max(speed, ref), 0, 1)`. Fitted to p95 of the observed pothole distribution; the previous `2.0` saturated below that distribution's *minimum*, painting every cluster "Severe". Paired with the tier floors in `dashboard/src/severity.ts` — change both or neither |
+| `SEVERITY_SPEED_REF` | `5.0` | m/s floor, so a crawl does not divide by ~zero |
+| `CLUSTER_EPS_M` | `25.0` | Assignment radius **ceiling**, not the radius. The working value is `min(2 × accuracy_m, this)` — the paper buffers each event at 2σ of its own GPS accuracy (median 6.8 m here) |
+| `CLUSTER_ADAPTIVE_RADIUS` | `true` | `false` restores the old flat radius for comparison |
+| `CLUSTER_MIN_POINTS` | `1` | A lone detection forms a cluster, as the paper does. Was 3, which discarded 46% of admitted members as DBSCAN noise without ever requiring corroboration |
+| `CLUSTER_PASS_GAP_MINUTES` | `20` | Silence that separates one drive from the next. A "pass" is the paper's unit of evidence |
+| `CLUSTER_MIN_DISTINCT_PASSES` | `3` | Read-path floor on passes, sibling of `CLUSTER_MIN_DISTINCT_DEVICES`. **Either** floor being met publishes a cluster |
+| `CLUSTER_WINDOW_DAYS` | `30` | How far back the member gate and every read surface look. Raise it on a dev database you treat as an archive — otherwise clusters silently vanish once collection is older than this |
+| `TILE_FRAMES_MIN_ZOOM` | `15` | Zoom floor for the camera-frame tile layer. Its own setting rather than sharing the observations floor — different table, different density |
+
+`SENSOR_OUTLIER_FEATURES`, `SEVERITY_SCALE` and `SEVERITY_SPEED_REF` are stored **on the fitted `sensor_model` row**, not read per-score. Changing one forces a refit on the next fit tick, but the existing `sensor_is_outlier` / `sensor_severity` values stay stale until the observations are re-scored — see the [integration-round runbook](./docs/runbooks/integration-round-runbook.md) §3.
 
 Every detection and VLM knob is documented in `.env.example`. To measure a VLM against the
 hand-labelled frames before trusting it, use `scripts/vlm_eval.py` (read-only; `--limit`
@@ -331,6 +343,54 @@ Single camera frame upload (multipart).
 
 ---
 
+### `GET /api/v1/potholes`
+
+The read path the mobile client consumes. **Public and unauthenticated**, and returns
+*locations only* — where confirmed potholes are, not how bad or how corroborated. The staff
+tier is `GET /api/v1/potholes/detail`, same SQL, fuller fields, behind a bearer token.
+
+**Required header:** `Accept-Version: v1`
+
+| Parameter | Required | Meaning |
+|---|---|---|
+| `bbox` | yes | `minLon,minLat,maxLon,maxLat`. Longitude span > 180° is rejected |
+| `zoom` | yes | `> 14` returns individual potholes; `<= 14` returns grid-aggregated cells |
+| `since` | no | ISO-8601; returns only clusters updated after it. Pair with `next_since` from the response |
+| `min_devices` | no | Corroboration floor by distinct devices. Defaults to `CLUSTER_MIN_DISTINCT_DEVICES` |
+| `min_passes` | no | Corroboration floor by distinct drives. Defaults to `CLUSTER_MIN_DISTINCT_PASSES` |
+
+**A cluster is returned if it meets EITHER floor.** Passes are the unit the source paper
+integrates over — "multiple users **and/or** multiple passes of any road segment" — and its own
+validation was a single phone driven on five different days, which a device-only floor scores as
+one. Both parameters are optional and default to config, so a client that sends neither (which
+the Android client does) behaves exactly as it always has.
+
+```json
+{
+  "items": [
+    { "type": "pothole", "id": "clu_...", "lat": 43.81, "lon": -79.43 }
+  ],
+  "generated_at": "2026-08-31T...Z",
+  "next_since": "2026-08-31T...Z"
+}
+```
+
+At `zoom <= 14` items are `{"type": "cluster", "centroid_lat", "centroid_lon", "count"}` instead.
+
+**An empty `items` is a normal answer, not a fault.** With a corroboration floor set and a
+single-vehicle survey, nothing qualifies — see
+[`docs/research/paper-fidelity-assessment.md`](./docs/research/paper-fidelity-assessment.md).
+`scripts/device_gate_eval.py` reports what each floor costs on the current data.
+
+**Error responses**
+
+| Status | Condition |
+|---|---|
+| 400 | Malformed bbox, out-of-range coordinates, `min >= max`, or a span PostGIS refuses |
+| 422 | Missing `bbox`/`zoom`, or a negative floor |
+
+---
+
 ## Database Schema
 
 The schema uses **generic asset naming** (per enterprise-architecture-plan.md §5.2) for multi-asset extensibility:
@@ -344,13 +404,15 @@ The schema uses **generic asset naming** (per enterprise-architecture-plan.md §
 | `fusion_run` | Fusion engine execution audit trail |
 | `fusion_pair` | Observation↔frame pairing with fused confidence, the `match_cost` that selected it, and `is_primary` (the best view of that observation) |
 | `asset_type_registry` | Lookup: asset_type → metadata |
-| `device_rate_limit` | Persistent rate tracking (**unused** — the live limiter is in-memory per worker) |
+| `device_rate_limit` | Per-device request counts in one-minute buckets. **Now live** — the limiter reads and writes it, so `--workers 2` shares one ceiling instead of two (`migrations/016`) |
 | `sensor_model` | Versioned ported-MATLAB classifier; one active row (Phase 2.1) |
 | `org` / `staff_user` / `org_member` / `refresh_token` | City-staff auth tier (Phase 2.4) |
 | `repair_log` | Audit trail for cluster repair/reopen (Phase 2.5) |
 | `model_disagreement` | device↔server probability gap, for Phase 3 review (Phase 2.3) |
 | `schema_migrations` | Migration ledger — filename, checksum, applied_at (Phase 2.6) |
 | `frame_label` | Human ground truth per frame: 1 pothole / 0 not / -1 unsure (Phase 2.7) |
+| `sensor_model.outlier_features_jsonb` | Which features the outlier gate was fitted on (`migrations/014`). `NULL` = the legacy pre-014 five, so an old model is still scored with the set it was fitted on rather than today's default |
+| `asset_cluster.distinct_passes` / `member_span_s` | Corroboration by drive rather than by device, and how long a cluster's members span (`migrations/015`). A span of seconds means one drive-past, not corroboration |
 
 `asset_observation.sensor_class_probs`, `asset_cluster.class_probs` and `asset_cluster.bearing_deg` (Phase 2.2c, `migrations/011`) carry the class distributions and heading that the spatiotemporal crowd fusion needs; see [`docs/phases/phase-2.2c-spatiotemporal-fusion.md`](./docs/phases/phase-2.2c-spatiotemporal-fusion.md).
 
@@ -402,6 +464,18 @@ pytest tests/ -v
 # environment variable is needed; export it only to target a different database.
 pytest -q
 ```
+
+### CI
+
+`.github/workflows/ci.yml` runs `ruff check .` then the full suite against a
+`postgis/postgis:16-3.4` service container on **`pothole_ci`** — the second name
+`tests/conftest.py` has always allowed.
+
+Locally, the `db_pool` fixture *skips* when Postgres is unreachable so the
+pure-unit tests still run without `docker compose up`. On CI that leniency is a
+trap: a service container that never came up would report a green run with most
+of the suite silently skipped. `_in_ci()` (set by any runner exporting `CI`)
+turns an unreachable database into a **failure** instead.
 
 ---
 
@@ -463,6 +537,9 @@ All are run from the repo root and take `DATABASE_URL` from `.env`.
 | `scripts/backfill_detection.py` | Run detection over already-uploaded frames, then clear `processed_at` so fusion re-scores the pairs (Phase 2.7) |
 | `scripts/pairing_eval.py` | Measure the pairing search: `--diff` compares the old and new rankings, `--fit-lead` fits the camera's lead band from `frame_label`. Read-only (Phase 2.2d) |
 | `scripts/requeue_frames.py` | Clear `processed_at` and re-run fusion over stored frames — the activation path after changing any `FUSION_*` pairing knob (Phase 2.2d) |
+| `scripts/device_gate_eval.py` | Sweep `CLUSTER_MIN_DISTINCT_DEVICES` and report what each floor costs, including whether clusters are corroboration or one pass. Read-only |
+| `scripts/crowd_sweep.py` | Sweep the clustering parameters, and reproduce the paper's survey-accumulation curve against self-consistency. Read-only |
+| `scripts/storage_audit.py` | Reconcile `storage/frames` against `asset_frame` both ways. Read-only by default; deletion **refuses a scratch database**, because a TRUNCATEd one makes every real frame look orphaned |
 
 Note the two guards point in **opposite** directions, deliberately: `seed_demo.py` writes
 fabricated data so it must never touch the real database, while `label_frames.py` writes ground

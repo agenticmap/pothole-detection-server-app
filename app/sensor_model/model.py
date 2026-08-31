@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.sensor_model.features import LEGACY_OUTLIER_FEATURES
+
 CLASS_POTHOLE = "pothole"
 CLASS_CRACK = "crack"
 CLASS_NOT = "not"
@@ -79,6 +81,12 @@ class SensorModel:
     n_observations: int
     bic: float | None = None
     sklearn_version: str | None = None
+    # Which features the IsolationForest was fitted on, in order. Load-bearing:
+    # scoring a model with a different set silently feeds sklearn a vector of the
+    # wrong width (or, worse, the right width in the wrong order). Defaults to
+    # the pre-migration-014 set so a legacy row with a NULL column still scores
+    # exactly as it did when it was fitted.
+    outlier_features: tuple[str, ...] = LEGACY_OUTLIER_FEATURES
     # sklearn objects (from the joblib blob); not part of the audit JSONB.
     gmm: Any = None
     iforest: Any = None

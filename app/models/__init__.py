@@ -61,7 +61,7 @@ class EventPayload(BaseModel):
     @classmethod
     def validate_timestamp(cls, v: str) -> str:
         """Validate ISO-8601 UTC timestamp format."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         try:
             # Accept both 'Z' suffix and '+00:00'

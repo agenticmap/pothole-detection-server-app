@@ -190,29 +190,101 @@ class TestEventsValidation:
 
 
 class TestEventsRateLimit:
-    """Test rate limiting behavior."""
+    """Rate limiting, now counted in Postgres rather than per-worker memory."""
 
     @pytest.mark.asyncio
-    async def test_rate_limit_enforced(self, client):
-        """Device exceeding events/hour limit gets 429."""
+    async def test_rate_limit_enforced(self, db_pool, monkeypatch):
         from fastapi import HTTPException
 
         from app.config import settings
-        from app.middleware.rate_limit import check_rate_limit, reset_rate_limits
+        from app.middleware.rate_limit import check_rate_limit
 
-        # check_rate_limit reads settings.rate_limit_events_per_hour dynamically,
-        # so mutate the cached settings object (env is read only at import time).
-        original = settings.rate_limit_events_per_hour
-        settings.rate_limit_events_per_hour = 5
-        reset_rate_limits()
+        monkeypatch.setattr(settings, "rate_limit_events_per_hour", 5)
+
+        for _ in range(5):
+            await check_rate_limit(db_pool, "rate-test-device", "events", count=1)
+
+        with pytest.raises(HTTPException) as exc:
+            await check_rate_limit(db_pool, "rate-test-device", "events", count=1)
+        assert exc.value.status_code == 429
+        assert exc.value.detail["current"] == 6
+        assert exc.value.detail["limit"] == 5
+
+    @pytest.mark.asyncio
+    async def test_a_batch_consumes_its_whole_size(self, db_pool, monkeypatch):
+        """`count` is the batch size, so one 10-event POST spends ten."""
+        from fastapi import HTTPException
+
+        from app.config import settings
+        from app.middleware.rate_limit import check_rate_limit
+
+        monkeypatch.setattr(settings, "rate_limit_events_per_hour", 5)
+        with pytest.raises(HTTPException):
+            await check_rate_limit(db_pool, "batch-device", "events", count=10)
+
+    @pytest.mark.asyncio
+    async def test_the_count_is_shared_not_per_process(self, db_pool, monkeypatch):
+        """The whole reason this moved into Postgres.
+
+        The old limiter kept module-level dicts, so with `uvicorn --workers 2`
+        each worker enforced its own private ceiling and the effective limit was
+        doubled. Two independent pools stand in for two workers: the second must
+        see what the first already spent.
+        """
+        from fastapi import HTTPException
+
+        from app.config import settings
+        from app.database import create_pool
+        from app.middleware.rate_limit import check_rate_limit
+
+        monkeypatch.setattr(settings, "rate_limit_events_per_hour", 3)
+        for _ in range(3):
+            await check_rate_limit(db_pool, "shared-device", "events", count=1)
+
+        other_worker = await create_pool()
         try:
-            # First 5 should pass
-            for _ in range(5):
-                check_rate_limit("rate-test-device", "events", count=1)
-
-            # 6th should fail
-            with pytest.raises(HTTPException) as exc_info:
-                check_rate_limit("rate-test-device", "events", count=1)
-            assert exc_info.value.status_code == 429
+            with pytest.raises(HTTPException) as exc:
+                await check_rate_limit(other_worker, "shared-device", "events", count=1)
+            assert exc.value.status_code == 429
         finally:
-            settings.rate_limit_events_per_hour = original
+            await other_worker.close()
+
+    @pytest.mark.asyncio
+    async def test_devices_do_not_share_an_allowance(self, db_pool, monkeypatch):
+        from app.config import settings
+        from app.middleware.rate_limit import check_rate_limit
+
+        monkeypatch.setattr(settings, "rate_limit_events_per_hour", 2)
+        for _ in range(2):
+            await check_rate_limit(db_pool, "device-a", "events", count=1)
+        # device-b has spent nothing and must not inherit device-a's usage.
+        await check_rate_limit(db_pool, "device-b", "events", count=1)
+
+    @pytest.mark.asyncio
+    async def test_resources_do_not_share_an_allowance(self, db_pool, monkeypatch):
+        from app.config import settings
+        from app.middleware.rate_limit import check_rate_limit
+
+        monkeypatch.setattr(settings, "rate_limit_events_per_hour", 2)
+        monkeypatch.setattr(settings, "rate_limit_frames_per_hour", 2)
+        for _ in range(2):
+            await check_rate_limit(db_pool, "dual-device", "events", count=1)
+        await check_rate_limit(db_pool, "dual-device", "frames", count=1)
+
+    @pytest.mark.asyncio
+    async def test_it_fails_open_when_accounting_breaks(self):
+        """A device that cannot upload loses collected drive data permanently.
+
+        Overshooting a quota costs a few rows of disk, so a broken counter allows
+        the request and logs at ERROR rather than 503ing ingestion.
+        """
+        import asyncpg
+
+        from app.middleware.rate_limit import check_rate_limit
+
+        class BrokenPool:
+            def acquire(self):
+                raise asyncpg.PostgresError("simulated outage")
+
+        # Must not raise.
+        await check_rate_limit(BrokenPool(), "unlucky-device", "events", count=1)

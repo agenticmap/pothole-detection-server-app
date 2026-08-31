@@ -256,29 +256,20 @@ class TestFramesRateLimit:
     """Test rate limiting for frame uploads."""
 
     @pytest.mark.asyncio
-    async def test_frame_rate_limit_enforced(self, client):
-        """Device exceeding frames/hour limit gets 429."""
+    async def test_frame_rate_limit_enforced(self, db_pool, monkeypatch):
         from fastapi import HTTPException
 
         from app.config import settings
-        from app.middleware.rate_limit import check_rate_limit, reset_rate_limits
+        from app.middleware.rate_limit import check_rate_limit
 
-        # check_rate_limit reads settings.rate_limit_frames_per_hour dynamically,
-        # so mutate the cached settings object (env is read only at import time).
-        original = settings.rate_limit_frames_per_hour
-        settings.rate_limit_frames_per_hour = 3
-        reset_rate_limits()
-        try:
-            # First 3 should pass
-            for _ in range(3):
-                check_rate_limit("frame-rate-device", "frames", count=1)
+        monkeypatch.setattr(settings, "rate_limit_frames_per_hour", 3)
+        for _ in range(3):
+            await check_rate_limit(db_pool, "frame-rate-device", "frames", count=1)
 
-            # 4th should fail
-            with pytest.raises(HTTPException) as exc_info:
-                check_rate_limit("frame-rate-device", "frames", count=1)
-            assert exc_info.value.status_code == 429
-        finally:
-            settings.rate_limit_frames_per_hour = original
+        with pytest.raises(HTTPException) as exc:
+            await check_rate_limit(db_pool, "frame-rate-device", "frames", count=1)
+        assert exc.value.status_code == 429
+        assert exc.value.detail["resource"] == "frames"
 
 
 class TestFrameMetadataScrubbing:

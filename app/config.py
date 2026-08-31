@@ -104,10 +104,14 @@ class Settings(BaseSettings):
     # Frame-only cluster members: a frame that sees a pothole nobody drove over.
     # 98.6% of pothole observations have no coincident frame, so this is the largest
     # recall ceiling in the pipeline — and it CANNOT BE HONESTLY ENABLED YET.
-    # server_probability is NULL on all 2916 frames (no model), leaving only the
-    # on-device probability, whose confidence floor was lowered to ~5% mid-collection
-    # (p50 0.118). Turning this on today would flood clustering with on-device
-    # guesses. The gate opens once Phase 2.7 measures a threshold.
+    # The original justification -- "server_probability is NULL on all 2916 frames
+    # (no model)" -- is NO LONGER TRUE: all 5,615 frames were scored by
+    # yolo11s_pothole_v1 in the Phase 2.7 backfill (mean p 0.151, 352 at p >= 0.5).
+    # The gate stays shut for a different reason: no threshold has been measured
+    # against ground truth, and enabling it would change the cluster member
+    # population at the same time as the 2026-08-30 outlier-gate fix, leaving
+    # neither result attributable. Reopen it deliberately, on its own.
+    # See docs/phases/integration-round-2026-08.md.
     fusion_frame_only_enabled: bool = False
     fusion_frame_only_min_probability: float = 0.5
 
@@ -120,11 +124,35 @@ class Settings(BaseSettings):
     sensor_segment_min_points: int = 9       # clusbearing.m segment-close trigger
     sensor_bearing_change_deg: float = 45.0  # heading change that closes a segment
     sensor_iforest_contamination: float = 0.1  # IsolationForest gate sensitivity
+    # Which features the IsolationForest gate is fitted on. Comma-separated;
+    # valid names are in features.OUTLIER_FEATURE_MENU. The default is
+    # deliberately class-neutral -- fitting the gate on ratio/gbar/magnitude
+    # makes it learn "pothole" and report it as "outlier" (it flagged 285 of 286
+    # on the collected data). Set to
+    # "ratio,gbar,magnitude,accel_std,speed_mps" to reproduce pre-2026-08-30
+    # behaviour. Changing this needs a re-fit AND a re-score: it changes what
+    # every sensor_is_outlier value means. See app/sensor_model/features.py.
+    sensor_outlier_features: str = "accel_std,speed_mps"
     sensor_random_state: int = 42            # determinism for fit (GMM + IForest)
 
     # Severity (IRI-style proxy): severity = clamp(scale * magnitude / max(speed, speed_ref), 0, 1)
+    #
+    # `scale` has no external calibration -- the output is arbitrary units clamped
+    # to [0,1] -- so it is fitted to the population the map actually shows rather
+    # than guessed. Measured on pothole_db over the 166 cluster-admitted pothole
+    # observations, the raw ratio magnitude/max(speed, 5) runs
+    #   p0 0.50 | p25 1.20 | p50 1.76 | p75 2.24 | p95 3.82 | max 14.49
+    # The previous scale of 2.0 saturated at ratio >= 0.5, i.e. at the *minimum*
+    # of that distribution: every admitted pothole scored exactly 1.0, 24 of 25
+    # clusters landed in the top tier, and every marker on the map was one
+    # colour. 1/p95 ~= 0.26, rounded to 0.25, spreads the same population across
+    # all four dashboard tiers with the top 5% clamped.
+    #
+    # This is a fit to one city's data. Re-measure with the query above before
+    # trusting it elsewhere, and note that changing it needs a re-fit and a
+    # re-score -- SeverityCalibration is stored on the sensor_model row.
     severity_speed_ref: float = 5.0          # m/s floor to avoid divide-by-zero at low speed
-    severity_scale: float = 2.0
+    severity_scale: float = 0.25
 
     # Cold-start heuristic fallback (used until an active model exists)
     fallback_ratio_mean: float = 3.0
@@ -133,11 +161,58 @@ class Settings(BaseSettings):
     # ── Clustering job (Phase 2.2) ──────────────────────────────────────────────
     clustering_enabled: bool = True
     clustering_interval_minutes: int = 15          # roadmap §2.5 cadence
-    cluster_eps_m: float = 25.0                    # ST_ClusterDBSCAN radius (meters)
-    cluster_min_points: int = 3                    # ST_ClusterDBSCAN core min
+    # Assignment radius CEILING, in metres. No longer the radius itself: Sattar et
+    # al. §4.4 buffer each event at 2 sigma of ITS OWN reported GPS accuracy, so the
+    # working radius is min(2 * accuracy_m, this). Measured over the admitted
+    # members, 2 sigma runs p25 5.1 m / median 6.8 m / p95 17.7 m -- a flat 25 m was
+    # ~3.7x the median, and combined with DBSCAN's chaining produced clusters up to
+    # 124 m across. This remains as a ceiling because accuracy_m is unbounded and one
+    # cold GPS fix must not swallow a block. An observation with NULL accuracy falls
+    # back to exactly this value, i.e. the old behaviour.
+    cluster_eps_m: float = 25.0
+    # false restores the flat radius for comparison, the same way
+    # SENSOR_OUTLIER_FEATURES keeps the pre-fix gate reachable.
+    cluster_adaptive_radius: bool = True
+    # ST_ClusterDBSCAN core minimum. 1 means a lone detection forms a cluster,
+    # which is what Sattar et al. do -- "if no cluster was queried from the
+    # database, the newly classified data event was considered as a new formed
+    # cluster and stored in the database" (§4.4). The paper has no quorum
+    # anywhere, and explicitly criticises count/voting rules for ignoring the
+    # probabilistic nature of the detections.
+    #
+    # It was 3, which looked like a corroboration requirement and was not:
+    # CLUSTER_EPS_M is 25 m and the measured median speed 13 m/s, so 25 m is
+    # 1.9 SECONDS of travel -- "three detections within 25 m" is one drive-past of
+    # one rough patch. Measured, every cluster it produced spanned a median of
+    # 2.0 s. What it did do was discard 87 of 191 admitted members (46%) as DBSCAN
+    # noise, which then appeared on no surface at all.
+    #
+    # Safe to relax only because the READ path now gates publication separately
+    # (cluster_min_distinct_devices OR cluster_min_distinct_passes). Raising this
+    # again would re-hide the same 46% rather than add any corroboration; measure
+    # with `python scripts/crowd_sweep.py --sweep` before changing it.
+    cluster_min_points: int = 1
     cluster_window_days: int = 30                  # only members seen in last N days
     cluster_member_min_confidence: float = 0.5     # fused_confidence floor for pair members
     cluster_min_distinct_devices: int = 2          # below this → not public (read-path filter)
+    # Corroboration by PASSES -- the paper's actual unit. Sattar et al. integrate
+    # "from multiple users AND/OR multiple passes of any road segment", and their
+    # own validation was one phone driven on five different days "to simulate the
+    # data collection model operated by different users". Counting only devices
+    # makes a single-vehicle survey campaign -- which is what the paper ran, and
+    # what this project has collected -- score zero.
+    #
+    # A pass is a contiguous run of one device's records with no gap longer than
+    # this. Gap-based rather than per-day so a drive crossing midnight stays one
+    # pass. Derived server-side; the Android app records the same notion as a
+    # "run" but does not upload it yet.
+    cluster_pass_gap_minutes: int = 20
+    # Read-path floor on passes, the sibling of cluster_min_distinct_devices.
+    # Either floor being met is enough. The paper's own Figure 9 puts >90% accuracy
+    # after three surveys, which is where this default comes from -- but measure it
+    # on your own data with `python scripts/crowd_sweep.py --accumulate` rather
+    # than inheriting one road in North York in 2018.
+    cluster_min_distinct_passes: int = 3
 
     # ── Spatiotemporal crowd fusion (Phase 2.2c) ────────────────────────────────
     # The integration half of Sattar's probabilistic crowdsourcing technique: cluster
@@ -180,6 +255,11 @@ class Settings(BaseSettings):
     # Raw observation points are only meaningful street-level, and an unbounded
     # low-zoom request would scan the largest table in the schema.
     tile_observations_min_zoom: int = 15
+    # Camera frames get their own floor rather than sharing the observations one:
+    # they are a different table with a different density (5,615 frames against
+    # 4,637 observations on the collected data), and tuning one should not silently
+    # move the other.
+    tile_frames_min_zoom: int = 15
     tile_max_features: int = 4000              # per-tile cap; bounds payload + encode time
     tile_extent: int = 4096                    # MVT coordinate space (the de-facto standard)
     tile_buffer: int = 64                      # px of bleed so edge symbols render whole

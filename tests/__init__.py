@@ -27,9 +27,18 @@ os.environ["RATE_LIMIT_FRAMES_PER_HOUR"] = "1000"
 # without firing background jobs. DB fusion tests call the jobs directly.
 os.environ["FUSION_ENABLED"] = "false"
 os.environ["SENSOR_FIT_ENABLED"] = "false"
+# Pin the clustering window to the shipped default.
+#
+# Settings reads the developer's .env, so without this the suite inherits it —
+# and several tests assert on the window by construction (inserting a 90-day-old
+# cluster and expecting it excluded). A dev machine that sets
+# CLUSTER_WINDOW_DAYS=3650 to stop an archive database ageing out then makes
+# those tests fail, which is the harmless direction. The dangerous direction is
+# the same mechanism silently making an assertion vacuous, so this is pinned
+# rather than left to chance — the same reason the four settings above are.
+os.environ["CLUSTER_WINDOW_DAYS"] = "30"
 
 from app.main import app  # noqa: E402
-from app.middleware.rate_limit import reset_rate_limits  # noqa: E402
 
 
 @pytest_asyncio.fixture
@@ -50,10 +59,18 @@ async def client() -> AsyncGenerator[httpx.AsyncClient, None]:
 
 @pytest.fixture(autouse=True)
 def clear_rate_limits():
-    """Reset rate limit state before each test."""
-    reset_rate_limits()
+    """Kept as a fixture name only — the reset itself moved.
+
+    Rate-limit counters used to be module-level dicts, so clearing them was a
+    synchronous call. They are now rows in `device_rate_limit`, and the db_pool
+    fixture's TRUNCATE owns them along with every other table.
+
+    This stays as an autouse no-op rather than being deleted because tests import
+    it by name, and because the alternative — opening a connection per test to
+    truncate one table — costs a round trip on all ~470 of them to protect
+    against an overrun that the 1000/hour test limit makes unreachable.
+    """
     yield
-    reset_rate_limits()
 
 
 def make_valid_event(client_id: str = "test-event-001") -> dict:

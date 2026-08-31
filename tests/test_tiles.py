@@ -277,3 +277,140 @@ class TestObservationTile:
         x, y = tile_of(LON, LAT, z)
         resp = await client.get(f"/api/v1/tiles/observations/{z}/{x}/{y}.mvt")
         assert resp.status_code == 401
+
+
+async def _insert_frame_row(
+    conn,
+    client_id,
+    *,
+    lat=LAT,
+    lon=LON,
+    device_id="dev-1",
+    device_probability=0.2,
+    server_probability=None,
+    server_model_id=None,
+    server_detections=None,
+    detected=False,
+    age_days=0,
+):
+    await conn.execute(
+        """
+        INSERT INTO asset_frame (
+            client_id, device_id, ts_utc, geom, jpeg_url,
+            device_probability, server_probability, server_model_id,
+            server_detections, detected_at
+        ) VALUES (
+            $1, $2, now() - make_interval(days => $3),
+            ST_SetSRID(ST_MakePoint($4, $5), 4326)::geography,
+            $6, $7, $8, $9, $10::jsonb,
+            CASE WHEN $11 THEN now() ELSE NULL END
+        )
+        """,
+        client_id, device_id, age_days, lon, lat,
+        f"{device_id}/{client_id}.jpg",
+        device_probability, server_probability, server_model_id,
+        server_detections, detected,
+    )
+
+
+class TestFrameTile:
+    """Camera frames as raw points.
+
+    The layer exists to answer "did this camera detection reach fusion?", which
+    the score alone cannot: a frame that scored 0.9 and never paired contributed
+    nothing to any cluster.
+    """
+
+    async def test_low_zoom_rejected(self, client, db_pool):
+        z = settings.tile_frames_min_zoom - 1
+        x, y = tile_of(LON, LAT, z)
+        resp = await client.get(f"/api/v1/tiles/frames/{z}/{x}/{y}.mvt", headers=auth())
+        assert resp.status_code == 400
+        assert "zoom" in resp.json()["detail"]
+
+    async def test_unauthenticated_is_401(self, client):
+        z = settings.tile_frames_min_zoom
+        x, y = tile_of(LON, LAT, z)
+        resp = await client.get(f"/api/v1/tiles/frames/{z}/{x}/{y}.mvt")
+        assert resp.status_code == 401
+
+    async def test_emits_detector_score_and_box_count(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _insert_frame_row(
+                conn,
+                "frm_scored",
+                server_probability=0.82,
+                server_model_id="yolo11s_pothole_v1",
+                server_detections='[{"class_id":0,"confidence":0.82,"bbox":[0,0,1,1]},'
+                                  '{"class_id":0,"confidence":0.4,"bbox":[0,0,1,1]}]',
+                detected=True,
+            )
+
+        z = settings.tile_frames_min_zoom
+        x, y = tile_of(LON, LAT, z)
+        resp = await client.get(f"/api/v1/tiles/frames/{z}/{x}/{y}.mvt", headers=auth())
+        assert resp.status_code == 200
+
+        layer = layer_named(resp.content, "frames")
+        assert layer.feature_count == 1
+        for key in ("server_probability", "server_box_count", "detected", "paired"):
+            assert key in layer.keys
+
+    async def test_unscored_frame_still_appears(self, client, db_pool):
+        """A frame the detector never ran on is exactly what an operator is hunting.
+
+        Filtering on server_probability would hide the backlog, which is the one
+        thing this layer is well placed to surface.
+        """
+        async with db_pool.acquire() as conn:
+            await _insert_frame_row(conn, "frm_unscored", server_probability=None)
+
+        z = settings.tile_frames_min_zoom
+        x, y = tile_of(LON, LAT, z)
+        resp = await client.get(f"/api/v1/tiles/frames/{z}/{x}/{y}.mvt", headers=auth())
+        assert layer_named(resp.content, "frames").feature_count == 1
+
+    async def test_reports_whether_the_frame_reached_fusion(self, client, db_pool):
+        """The point of the layer: a high score that never paired changed nothing."""
+        async with db_pool.acquire() as conn:
+            await _insert_frame_row(conn, "frm_paired", server_probability=0.9)
+            await _insert_frame_row(conn, "frm_orphan", server_probability=0.9)
+            await conn.execute(
+                """
+                INSERT INTO asset_observation (
+                    client_id, device_id, asset_type, schema_version, ts_utc, geom, confidence
+                ) VALUES ('obs_1', 'dev-1', 'pothole', 1, now(),
+                          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, 1.0)
+                """,
+                LON, LAT,
+            )
+            await conn.execute(
+                """
+                INSERT INTO fusion_pair (
+                    event_client_id, frame_client_id, fused_confidence,
+                    delta_ms, delta_m, is_primary
+                ) VALUES ('obs_1', 'frm_paired', 0.77, -500, 12.0, true)
+                """
+            )
+
+        z = settings.tile_frames_min_zoom
+        x, y = tile_of(LON, LAT, z)
+        resp = await client.get(f"/api/v1/tiles/frames/{z}/{x}/{y}.mvt", headers=auth())
+        layer = layer_named(resp.content, "frames")
+        assert layer.feature_count == 2
+        assert "fused_confidence" in layer.keys
+        assert "is_primary" in layer.keys
+
+    async def test_window_days_excludes_old_frames(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _insert_frame_row(conn, "frm_old", age_days=400)
+
+        z = settings.tile_frames_min_zoom
+        x, y = tile_of(LON, LAT, z)
+        narrow = await client.get(f"/api/v1/tiles/frames/{z}/{x}/{y}.mvt", headers=auth())
+        assert narrow.content == b""
+
+        wide = await client.get(
+            f"/api/v1/tiles/frames/{z}/{x}/{y}.mvt?window_days=500", headers=auth()
+        )
+        assert layer_named(wide.content, "frames").feature_count == 1

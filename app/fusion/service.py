@@ -25,6 +25,7 @@ from app.config import settings
 from app.fusion.engine import FusionInput
 from app.fusion.registry import get_engine
 from app.fusion.spatiotemporal import integrate_cluster
+from app.sensor_model.features import parse_outlier_features
 from app.sensor_model.fit import FitError, fit_sensor_model
 from app.sensor_model.model import CLASS_POTHOLE, SensorModel, SeverityCalibration
 from app.sensor_model.score import score_observation
@@ -88,8 +89,32 @@ async def _run_fit_locked(pool: asyncpg.Pool) -> str | None:
         logger.info("Fit gate not met: %d/%d fittable observations", total, n_min)
         return None
 
+    configured_features = parse_outlier_features(settings.sensor_outlier_features)
+    configured_severity = SeverityCalibration(
+        speed_ref=settings.severity_speed_ref,
+        scale=settings.severity_scale,
+    )
+
     active = await load_active_model(pool)
-    if active is not None and (total - active.n_observations) < n_min:
+    # Changed calibration forces a refit regardless of how many new observations
+    # there are. Both the outlier feature set and the severity calibration are
+    # stored ON the model, so without this an operator can edit the setting,
+    # restart, see no error and get no change -- for however long it takes 200
+    # more observations to arrive. The values are only reachable through a refit.
+    calibration_changed = active is not None and (
+        active.outlier_features != configured_features
+        or active.severity_calib != configured_severity
+    )
+    if calibration_changed:
+        logger.info(
+            "Refitting: calibration changed. outlier_features %s -> %s; "
+            "severity %s -> %s. Existing sensor_is_outlier and sensor_severity "
+            "values came from the old calibration and are stale until the "
+            "observations are re-scored.",
+            ",".join(active.outlier_features), ",".join(configured_features),
+            active.severity_calib, configured_severity,
+        )
+    if active is not None and not calibration_changed and (total - active.n_observations) < n_min:
         logger.info(
             "Fit skipped: only %d new observations since last fit (need %d)",
             total - active.n_observations, n_min,
@@ -107,10 +132,8 @@ async def _run_fit_locked(pool: asyncpg.Pool) -> str | None:
             k_max=settings.sensor_fit_k_max,
             contamination=settings.sensor_iforest_contamination,
             random_state=settings.sensor_random_state,
-            severity_calib=SeverityCalibration(
-                speed_ref=settings.severity_speed_ref,
-                scale=settings.severity_scale,
-            ),
+            outlier_feature_names=configured_features,
+            severity_calib=configured_severity,
         )
     except FitError as e:
         logger.warning("Sensor model fit failed: %s", e)
@@ -573,12 +596,66 @@ paired AS (
     FROM fusion_pair
     GROUP BY event_client_id
 ),
+-- Pass (sweep) identity -- the paper's actual unit of evidence.
+--
+-- Sattar et al. integrate "from multiple users AND/OR multiple passes of any road
+-- segment", and their own validation was ONE phone driven on five different days
+-- "to simulate the data collection model operated by different users". Counting
+-- distinct devices therefore measures the wrong thing: one car over the same
+-- defect on three days is three surveys in the paper and one device here.
+--
+-- A pass is a contiguous run of a device's records with no gap longer than
+-- $6 minutes -- i.e. a drive. Gap-based rather than date_trunc('day') on purpose:
+-- a fixed bucket splits a drive that crosses midnight, the same class of bug
+-- _split_by_direction exists to avoid at 360 degrees.
+--
+-- Built from the device's FULL timeline, not the admitted member set. A drive
+-- can easily go 25 minutes between two admitted potholes while never stopping,
+-- and keying off the filtered set would score that as two passes.
+device_timeline AS (
+    SELECT o.client_id, 'observation'::text AS kind, o.device_id, o.ts_utc
+    FROM asset_observation o
+    WHERE o.received_at > now() - make_interval(days => $1)
+      AND ($7::timestamptz IS NULL OR o.ts_utc <= $7)
+    UNION ALL
+    SELECT fr.client_id, 'frame'::text, fr.device_id, fr.ts_utc
+    FROM asset_frame fr
+    WHERE fr.received_at > now() - make_interval(days => $1)
+      AND ($7::timestamptz IS NULL OR fr.ts_utc <= $7)
+),
+passes AS (
+    SELECT
+        client_id,
+        kind,
+        device_id || ':' || sum(is_new) OVER (
+            PARTITION BY device_id ORDER BY ts_utc, client_id ROWS UNBOUNDED PRECEDING
+        )::text AS pass_key
+    FROM (
+        SELECT
+            client_id, kind, device_id, ts_utc,
+            CASE
+                WHEN lag(ts_utc) OVER w IS NULL THEN 1
+                WHEN ts_utc - lag(ts_utc) OVER w > make_interval(mins => $6) THEN 1
+                ELSE 0
+            END AS is_new
+        FROM device_timeline
+        WINDOW w AS (PARTITION BY device_id ORDER BY ts_utc, client_id)
+    ) t
+),
 members AS (
     SELECT
         o.client_id,
         o.device_id,
+        -- LEFT JOIN, not JOIN: the timeline uses the same window filter as this
+        -- query so every member should match, but a future filter drift must not
+        -- silently drop members. The fallback collapses a device's unmatched rows
+        -- into ONE pass, so it can only ever understate corroboration.
+        COALESCE(pa.pass_key, o.device_id || ':unmatched') AS pass_key,
         o.geom,
         o.ts_utc,
+        -- The paper's assignment radius is 2 sigma of THIS event's reported GPS
+        -- accuracy (§4.4), not a global constant. Populated on every row.
+        o.accuracy_m,
         COALESCE(o.sensor_severity, 0.0) AS severity,
         o.bearing_deg,
         o.sensor_class_probs,
@@ -586,7 +663,16 @@ members AS (
         'observation' AS kind
     FROM asset_observation o
     LEFT JOIN paired p ON p.event_client_id = o.client_id
+    LEFT JOIN passes pa ON pa.client_id = o.client_id AND pa.kind = 'observation'
     WHERE o.received_at > now() - make_interval(days => $1)
+      -- $7 is the as-of cutoff for backtesting: NULL means NO cutoff, a timestamp
+      -- means "the member set as it stood then". NULL must NOT be COALESCEd to
+      -- now(): a device with a fast clock produces ts_utc slightly in the future,
+      -- and "now" would silently drop those from clustering -- caught by
+      -- test_new_detection_after_repair_forms_a_fresh_cluster, which dates its
+      -- recurrence in the future. Only a backtest passes a value; run_cluster_job
+      -- passes NULL, so production behaviour is unchanged.
+      AND ($7::timestamptz IS NULL OR o.ts_utc <= $7)
       AND (
             (o.sensor_class = 'pothole' AND o.sensor_is_outlier IS NOT TRUE)
             OR COALESCE(p.max_fused, 0.0) >= $2
@@ -607,16 +693,22 @@ members AS (
     -- Frame-only members (Phase 2.2d): a pothole the camera saw that no wheel hit.
     -- 98.6% of pothole-classed observations have no coincident frame at all, so
     -- vision-without-impact is the largest recall ceiling in the pipeline -- and
-    -- until Phase 2.7 ships a model this arm is DISABLED, because server_probability
-    -- is NULL on every frame and the only remaining input is the on-device score,
-    -- whose confidence floor was dropped to ~5% mid-collection (p50 0.118). $4 is
-    -- the kill switch rather than a Python branch so both member queries stay one
+    -- this arm is DISABLED. Note the original reason ("server_probability is NULL
+    -- on every frame") no longer holds: the Phase 2.7 backfill scored all 5,615.
+    -- What is still missing is a measured threshold -- the on-device score's
+    -- confidence floor was dropped to ~5% mid-collection (p50 0.118), and no
+    -- server threshold has been validated against ground truth. $4 is the kill
+    -- switch rather than a Python branch so both member queries stay one
     -- statement each and cannot diverge.
     SELECT
         fr.client_id,
         fr.device_id,
+        COALESCE(pf.pass_key, fr.device_id || ':unmatched') AS pass_key,
         fr.geom,
         fr.ts_utc,
+        -- asset_frame has no accuracy column, so frames take the NULL fallback
+        -- (which resolves to the old fixed CLUSTER_EPS_M).
+        NULL::double precision AS accuracy_m,
         -- A frame carries no accelerometer magnitude, so it has no severity proxy
         -- and no heading. 0.0 rather than NULL because the cluster severity is a
         -- median over this column; NULL would make the median silently ignore the
@@ -635,8 +727,10 @@ members AS (
         COALESCE(fr.server_probability, fr.device_probability) AS confidence,
         'frame' AS kind
     FROM asset_frame fr
+    LEFT JOIN passes pf ON pf.client_id = fr.client_id AND pf.kind = 'frame'
     WHERE $4
       AND fr.received_at > now() - make_interval(days => $1)
+      AND ($7::timestamptz IS NULL OR fr.ts_utc <= $7)
       AND COALESCE(fr.server_probability, fr.device_probability) >= $5
       -- Only frames that never paired: a paired frame's evidence already reached
       -- clustering through its observation's fused_confidence, and admitting it
@@ -660,87 +754,40 @@ FROM members
 """
 
 # ST_ClusterDBSCAN runs on planar geometry; we project to Web Mercator (3857) so
-# eps is in meters. $4 = eps in 3857 map units (= eps_m / cos(lat), corrected for
-# Mercator scale by the caller), $5 = min_points. Centroid is the
-# confidence-weighted mean of member points (floored weight avoids div-by-zero).
-_CLUSTER_SQL = f"""
-WITH {_MEMBERS_CTE},
-labeled AS (
-    SELECT
-        m.*,
-        ST_X(m.geom::geometry) AS lon,
-        ST_Y(m.geom::geometry) AS lat,
-        GREATEST(m.confidence, 0.001) AS w,
-        ST_ClusterDBSCAN(ST_Transform(m.geom::geometry, 3857), eps := $6, minpoints := $7)
-            OVER () AS lbl
-    FROM members m
-)
+# eps is in meters. $1-$7 belong to _MEMBERS_CTE; $8 = eps in 3857 map units
+# (= eps_m / cos(lat), corrected for Mercator scale by the caller), $9 = min_points.
+# Centroid is the confidence-weighted mean of member points (floored weight avoids
+# div-by-zero).
+# Members as plain rows. Grouping happens in Python now, not in SQL.
+#
+# ST_ClusterDBSCAN used to do it here, and could not implement the paper: it takes
+# ONE scalar eps for the whole window function, whereas §4.4 buffers each event by
+# 2 sigma of ITS OWN reported GPS accuracy. DBSCAN also chains -- A joins B, B joins
+# C, so A and C need never be within eps of each other -- which on the collected data
+# produced a "single pothole" spanning 124 m. The paper's rule matches an event to a
+# cluster CENTROID, so it cannot chain.
+#
+# $1-$7 belong to _MEMBERS_CTE. Ordering is load-bearing: assignment is sequential,
+# so the result depends on it, and (ts_utc, client_id) makes a re-run byte-identical.
+_MEMBER_ROWS_SQL = f"""
+WITH {_MEMBERS_CTE}
 SELECT
-    ST_X(centroid) AS centroid_lon,
-    ST_Y(centroid) AS centroid_lat,
+    client_id,
+    device_id,
+    pass_key,
+    ts_utc,
+    accuracy_m,
     severity,
+    bearing_deg,
+    sensor_class_probs,
     confidence,
-    observation_count,
-    distinct_devices,
-    last_seen,
-    -- Normalise into [0, 360). The extra branch is not pedantry: atan2 returns
-    -- ~-1e-15 for a mean heading of due north, and -1e-15 + 360 is exactly 360.0 in
-    -- float, so a naive wrap stores 360 degrees in a column documented as [0, 360).
-    CASE
-        WHEN bearing_raw < -1e-9 THEN bearing_raw + 360.0
-        WHEN bearing_raw < 0 THEN 0.0
-        ELSE bearing_raw
-    END AS bearing_deg,
-    member_ids,
-    member_confidences,
-    member_lons,
-    member_lats,
-    member_ts,
-    member_class_probs,
-    member_bearings,
-    member_devices,
-    member_severities,
-    member_kinds
-FROM (
-    SELECT
-        ST_SetSRID(ST_MakePoint(
-            SUM(lon * w) / SUM(w),
-            SUM(lat * w) / SUM(w)
-        ), 4326) AS centroid,
-        percentile_cont(0.5) WITHIN GROUP (ORDER BY severity) AS severity,
-        avg(confidence) AS confidence,
-        count(*)::int AS observation_count,
-        count(DISTINCT device_id)::int AS distinct_devices,
-        max(ts_utc) AS last_seen,
-        -- Circular mean, NOT avg(bearing_deg): averaging 350 and 10 arithmetically
-        -- gives 180, i.e. the exact opposite heading, which would then merge the two
-        -- carriageways this column exists to keep apart. Left in atan2's native
-        -- (-180, 180] range here and normalised in the outer select, because mod()
-        -- has no double-precision overload and an alias is not visible in its own
-        -- SELECT list.
-        degrees(atan2(avg(sin(radians(bearing_deg))), avg(cos(radians(bearing_deg)))))
-            AS bearing_raw,
-        array_agg(client_id ORDER BY client_id) AS member_ids,
-        array_agg(confidence ORDER BY client_id) AS member_confidences,
-        -- Per-member inputs for the spatiotemporal integration (Phase 2.2c). Ordered
-        -- by client_id so every array lines up and the result does not depend on the
-        -- order the planner happened to emit rows in.
-        array_agg(lon ORDER BY client_id) AS member_lons,
-        array_agg(lat ORDER BY client_id) AS member_lats,
-        array_agg(ts_utc ORDER BY client_id) AS member_ts,
-        array_agg(sensor_class_probs ORDER BY client_id) AS member_class_probs,
-        array_agg(bearing_deg ORDER BY client_id) AS member_bearings,
-        array_agg(device_id ORDER BY client_id) AS member_devices,
-        array_agg(severity ORDER BY client_id) AS member_severities,
-        -- 'observation' or 'frame'; observation_cluster_link.kind needs it per row.
-        array_agg(kind ORDER BY client_id) AS member_kinds,
-        min(client_id) AS sort_key
-    FROM labeled
-    WHERE lbl IS NOT NULL
-    GROUP BY lbl
-) g
-ORDER BY sort_key
+    kind,
+    ST_X(geom::geometry) AS lon,
+    ST_Y(geom::geometry) AS lat
+FROM members
+ORDER BY ts_utc, client_id
 """
+
 
 # Match a freshly-computed cluster to an existing non-repaired one by centroid
 # proximity, skipping any already claimed in this run. $1=lon $2=lat $3=eps_m
@@ -778,7 +825,8 @@ UPDATE asset_cluster SET
     centroid = ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
     severity = $4, confidence = $5, observation_count = $6,
     distinct_devices = $7, last_seen = $8, updated_at = now(),
-    bearing_deg = $9, class_probs = $10::jsonb
+    bearing_deg = $9, class_probs = $10::jsonb,
+    distinct_passes = $11, member_span_s = $12
 WHERE cluster_id = $1
 """
 
@@ -786,10 +834,10 @@ _INSERT_CLUSTER_SQL = """
 INSERT INTO asset_cluster (
     cluster_id, asset_type, centroid, severity, confidence,
     observation_count, distinct_devices, last_seen, source,
-    bearing_deg, class_probs
+    bearing_deg, class_probs, distinct_passes, member_span_s
 )
 VALUES ($1, 'pothole', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
-        $4, $5, $6, $7, $8, 'crowd', $9, $10::jsonb)
+        $4, $5, $6, $7, $8, 'crowd', $9, $10::jsonb, $11, $12)
 """
 
 _DELETE_LINKS_SQL = "DELETE FROM observation_cluster_link WHERE cluster_id = $1"
@@ -889,6 +937,178 @@ def _split_by_direction(cluster, tolerance_deg: float) -> list[list[int]]:
     return [sorted(g) for g in groups]
 
 
+def _radius_m(accuracy_m, *, eps_m: float) -> float:
+    """The paper's assignment buffer for one event: 2 sigma of its own GPS accuracy.
+
+    §4.4 deliberately widens Android's native 1-sigma figure to 2 sigma ("95%
+    confidence level ... were considered to search for intersected clusters").
+
+    Two guards on top of the paper:
+      * `eps_m` is a CEILING, not the radius. `accuracy_m` is unbounded (26.5 m
+        observed, but a cold fix can report hundreds), and one bad fix must not
+        swallow a city block.
+      * NULL accuracy falls back to `eps_m`, i.e. exactly today's fixed radius, so
+        rows predating the GPS-quality column behave as they always have. Frame
+        members always take this path -- asset_frame has no accuracy column.
+    """
+    if not settings.cluster_adaptive_radius:
+        return eps_m
+    if accuracy_m is None:
+        return eps_m
+    return min(2.0 * float(accuracy_m), eps_m)
+
+
+def _metres_between(lon_a: float, lat_a: float, lon_b: float, lat_b: float) -> float:
+    """Flat-earth distance. Same approximation and rationale as _member_distances."""
+    lat_scale = math.cos(math.radians((lat_a + lat_b) / 2.0))
+    dx = (lon_a - lon_b) * _M_PER_DEG_LAT * lat_scale
+    dy = (lat_a - lat_b) * _M_PER_DEG_LAT
+    return math.hypot(dx, dy)
+
+
+class _ProximityIndex:
+    """Coarse lat/lon buckets, so assignment does not go quadratic.
+
+    Assignment is O(events x candidate clusters). At today's ~200 members that is
+    free, but it is a landmine at 100k: this keeps each lookup local to a 3x3
+    neighbourhood of cells sized at the search ceiling.
+    """
+
+    def __init__(self, cell_m: float) -> None:
+        self._cell_deg = max(cell_m, 1.0) / _M_PER_DEG_LAT
+        self._cells: dict[tuple[int, int], list[int]] = {}
+
+    def _key(self, lon: float, lat: float) -> tuple[int, int]:
+        return (int(math.floor(lon / self._cell_deg)), int(math.floor(lat / self._cell_deg)))
+
+    def add(self, lon: float, lat: float, ref: int) -> None:
+        self._cells.setdefault(self._key(lon, lat), []).append(ref)
+
+    def near(self, lon: float, lat: float) -> list[int]:
+        cx, cy = self._key(lon, lat)
+        out: list[int] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                out.extend(self._cells.get((cx + dx, cy + dy), ()))
+        return out
+
+
+def _assign_members(
+    members: dict, *, eps_m: float, bearing_tolerance_deg: float | None
+) -> list[list[int]]:
+    """Group members into clusters the way Sattar et al. §4.3-4.4 does.
+
+    Two stages, and the order between them is the whole point.
+
+    **Stage 1 - collapse within a sweep.** The paper's phone emits one anomaly per
+    defect; ours re-triggers, so every cluster it produced spanned a median of 2.0
+    seconds with three-plus members. Collapsing near-coincident detections from one
+    pass into a single sweep-event restores the assumption the paper's algorithm is
+    built on, and is what makes a cluster's member count mean "sweeps that saw it".
+
+    **Stage 2 - match against PRIOR sweeps only.** Replaying sweeps oldest-first,
+    each sweep-event looks for candidate clusters as they stood BEFORE that sweep
+    began. Clusters created during a sweep are deliberately not candidates for other
+    events in the same sweep -- that is what "candidates from previous sweeps"
+    means, and without the snapshot a sweep would silently merge into itself.
+
+    Matching is to a cluster CENTROID, never point-to-point, so this cannot chain
+    the way DBSCAN did (A-B, B-C, therefore A-C at any distance).
+
+    Returns member-index lists. Pure and deterministic given the query's ordering.
+    """
+    n = len(members["member_ids"])
+    if n == 0:
+        return []
+
+    lons = [float(x) for x in members["member_lons"]]
+    lats = [float(x) for x in members["member_lats"]]
+    accs = members["member_accuracy"]
+    bearings = members["member_bearings"]
+
+    # ── Stage 1: within-sweep collapse ──────────────────────────────────────
+    by_sweep: dict[str, list[int]] = {}
+    for i in range(n):
+        by_sweep.setdefault(members["member_pass_keys"][i], []).append(i)
+
+    # A sweep-event is (member indices, centroid lon, centroid lat, radius).
+    sweep_events: list[tuple[list[int], float, float, float]] = []
+    for _, idx in sorted(by_sweep.items()):
+        events: list[list] = []  # [indices, lon, lat, radius]
+        for i in idx:
+            r = _radius_m(accs[i], eps_m=eps_m)
+            best, best_d = None, None
+            for ev in events:
+                d = _metres_between(lons[i], lats[i], ev[1], ev[2])
+                if d <= min(r, ev[3]) and (best_d is None or d < best_d):
+                    best, best_d = ev, d
+            if best is None:
+                events.append([[i], lons[i], lats[i], r])
+            else:
+                best[0].append(i)
+                k = len(best[0])
+                best[1] += (lons[i] - best[1]) / k
+                best[2] += (lats[i] - best[2]) / k
+                # Keep the tightest buffer: the best fix is the best estimate of
+                # where the defect is, and one poor fix must not widen the event.
+                best[3] = min(best[3], r)
+        sweep_events.extend((e[0], e[1], e[2], e[3]) for e in events)
+
+    # Oldest sweep first, so "prior sweep" is well defined.
+    sweep_events.sort(key=lambda e: (members["member_ts"][e[0][0]], members["member_ids"][e[0][0]]))
+
+    # ── Stage 2: match each sweep-event against clusters from earlier sweeps ──
+    clusters: list[list[int]] = []          # member indices per cluster
+    centroids: list[tuple[float, float]] = []
+    index = _ProximityIndex(eps_m)
+
+    current_sweep = None
+    visible = 0  # clusters that existed before the sweep being processed
+    for idx, ev_lon, ev_lat, radius in sweep_events:
+        sweep = members["member_pass_keys"][idx[0]]
+        if sweep != current_sweep:
+            # Snapshot: everything created so far belongs to earlier sweeps.
+            current_sweep = sweep
+            visible = len(clusters)
+
+        best, best_d = None, None
+        for c in index.near(ev_lon, ev_lat):
+            if c >= visible:
+                continue
+            d = _metres_between(ev_lon, ev_lat, centroids[c][0], centroids[c][1])
+            if d > radius:
+                continue
+            if bearing_tolerance_deg is not None:
+                a = _mean_bearing([bearings[i] for i in clusters[c]])
+                b = _mean_bearing([bearings[i] for i in idx])
+                if a is not None and b is not None and _circular_diff(a, b) > bearing_tolerance_deg:
+                    continue
+            if best_d is None or d < best_d:
+                best, best_d = c, d
+
+        if best is None:
+            clusters.append(list(idx))
+            centroids.append((ev_lon, ev_lat))
+            index.add(ev_lon, ev_lat, len(clusters) - 1)
+        else:
+            clusters[best].extend(idx)
+            k = len(clusters[best])
+            cx, cy = centroids[best]
+            centroids[best] = (cx + (ev_lon - cx) / k, cy + (ev_lat - cy) / k)
+
+    return [sorted(c) for c in clusters]
+
+
+def _mean_bearing(values) -> float | None:
+    """Circular mean in [0, 360), or None when nothing has a heading."""
+    known = [float(v) for v in values if v is not None]
+    if not known:
+        return None
+    sin_sum = sum(math.sin(math.radians(v)) for v in known)
+    cos_sum = sum(math.cos(math.radians(v)) for v in known)
+    return math.degrees(math.atan2(sin_sum, cos_sum)) % 360.0
+
+
 def _subgroup_row(cluster, idx: list[int]) -> dict:
     """Recompute a cluster row from a subset of its members.
 
@@ -930,6 +1150,11 @@ def _subgroup_row(cluster, idx: list[int]) -> dict:
         "confidence": sum(confs) / len(confs),
         "observation_count": len(idx),
         "distinct_devices": len({cluster["member_devices"][i] for i in idx}),
+        "distinct_passes": len({cluster["member_pass_keys"][i] for i in idx}),
+        "member_span_s": (
+            max(cluster["member_ts"][i] for i in idx)
+            - min(cluster["member_ts"][i] for i in idx)
+        ).total_seconds(),
         "last_seen": max(cluster["member_ts"][i] for i in idx),
         "bearing_deg": bearing,
         "member_ids": [cluster["member_ids"][i] for i in idx],
@@ -944,6 +1169,7 @@ def _subgroup_row(cluster, idx: list[int]) -> dict:
         # future caller that re-read them.
         "member_kinds": [cluster["member_kinds"][i] for i in idx],
         "member_devices": [cluster["member_devices"][i] for i in idx],
+        "member_pass_keys": [cluster["member_pass_keys"][i] for i in idx],
         "member_severities": [cluster["member_severities"][i] for i in idx],
         "member_bearings": [cluster["member_bearings"][i] for i in idx],
     }
@@ -1027,7 +1253,9 @@ def _integrate_cluster_row(cluster) -> tuple[float, str, list[float]] | None:
     return confidence, json.dumps(posterior.distribution), posterior.weights
 
 
-async def _compute_clusters(conn, *, window, min_conf, eps_m, min_points):
+async def _compute_clusters(
+    conn, *, window, min_conf, eps_m, min_points, pass_gap_minutes, as_of=None
+):
     """Run the member gate + DBSCAN. Returns (rows, n_members, mean_lat, eps_units).
 
     Separated from the write phase so a test can interpose between the two and
@@ -1040,27 +1268,58 @@ async def _compute_clusters(conn, *, window, min_conf, eps_m, min_points):
         eps_m,
         settings.fusion_frame_only_enabled,
         settings.fusion_frame_only_min_probability,
+        pass_gap_minutes,
+        as_of,
     )
     n_members = stats["n"] or 0
     if n_members < min_points:
         return None, n_members, None, None
 
-    # Web-Mercator distorts distance by 1/cos(lat); scale eps so the planar
-    # threshold corresponds to eps_m ground meters at this latitude.
     mean_lat = float(stats["mean_lat"])
-    eps_units = eps_m / max(math.cos(math.radians(mean_lat)), 1e-6)
 
-    clusters = await conn.fetch(
-        _CLUSTER_SQL,
+    rows = await conn.fetch(
+        _MEMBER_ROWS_SQL,
         window,
         min_conf,
         eps_m,
         settings.fusion_frame_only_enabled,
         settings.fusion_frame_only_min_probability,
-        eps_units,
-        min_points,
+        pass_gap_minutes,
+        as_of,
     )
-    return clusters, n_members, mean_lat, eps_units
+    if not rows:
+        return [], n_members, mean_lat, None
+
+    # One "all members" record in the shape _subgroup_row already consumes, so the
+    # aggregate lives in exactly one place rather than being written twice.
+    everyone = {
+        "member_ids": [r["client_id"] for r in rows],
+        "member_confidences": [float(r["confidence"]) for r in rows],
+        "member_lons": [float(r["lon"]) for r in rows],
+        "member_lats": [float(r["lat"]) for r in rows],
+        "member_ts": [r["ts_utc"] for r in rows],
+        "member_class_probs": [r["sensor_class_probs"] for r in rows],
+        "member_bearings": [r["bearing_deg"] for r in rows],
+        "member_devices": [r["device_id"] for r in rows],
+        "member_pass_keys": [r["pass_key"] for r in rows],
+        "member_severities": [float(r["severity"]) for r in rows],
+        "member_kinds": [r["kind"] for r in rows],
+        "member_accuracy": [r["accuracy_m"] for r in rows],
+    }
+
+    groups = _assign_members(
+        everyone,
+        eps_m=eps_m,
+        bearing_tolerance_deg=(
+            settings.cluster_bearing_tolerance_deg if settings.cluster_bearing_aware else None
+        ),
+    )
+    # min_points is now a floor on cluster SIZE rather than a DBSCAN core minimum.
+    # At the default of 1 it keeps everything, which is the paper's behaviour.
+    clusters = [_subgroup_row(everyone, g) for g in groups if len(g) >= min_points]
+    # Stable output order, as the old `ORDER BY sort_key` gave.
+    clusters.sort(key=lambda c: c["member_ids"][0])
+    return clusters, n_members, mean_lat, None
 
 
 async def run_cluster_job(pool: asyncpg.Pool) -> int:
@@ -1081,7 +1340,9 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
             min_points = settings.cluster_min_points
 
             clusters, n_members, mean_lat, eps_units = await _compute_clusters(
-                conn, window=window, min_conf=min_conf, eps_m=eps_m, min_points=min_points
+                conn, window=window, min_conf=min_conf, eps_m=eps_m,
+                min_points=min_points,
+                pass_gap_minutes=settings.cluster_pass_gap_minutes,
             )
             if clusters is None:
                 logger.info("Cluster gate not met: %d members (< %d).", n_members, min_points)
@@ -1110,6 +1371,15 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                             "window_days": window,
                             "member_min_confidence": min_conf,
                             "mean_lat": mean_lat,
+                            # Everything below was previously absent, so a run could
+                            # not be attributed to the parameters that produced it --
+                            # which is exactly what a config sweep needs.
+                            "pass_gap_minutes": settings.cluster_pass_gap_minutes,
+                            "bearing_aware": settings.cluster_bearing_aware,
+                            "bearing_tolerance_deg": settings.cluster_bearing_tolerance_deg,
+                            "spatiotemporal_enabled": settings.cluster_spatiotemporal_enabled,
+                            "prior_concentration": settings.cluster_prior_concentration,
+                            "frame_only_enabled": settings.fusion_frame_only_enabled,
                         }
                     ),
                     n_members,
@@ -1146,6 +1416,7 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                             c["severity"], confidence, c["observation_count"],
                             c["distinct_devices"], c["last_seen"],
                             c["bearing_deg"], class_probs,
+                            c["distinct_passes"], c["member_span_s"],
                         )
                     else:
                         # Re-check for a repair that landed while this run was
@@ -1167,6 +1438,7 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                             c["severity"], confidence, c["observation_count"],
                             c["distinct_devices"], c["last_seen"],
                             c["bearing_deg"], class_probs,
+                            c["distinct_passes"], c["member_span_s"],
                         )
                     matched.append(cluster_id)
 

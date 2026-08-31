@@ -19,8 +19,33 @@ from __future__ import annotations
 # match the order used at fit time when standardization stats were computed).
 CLASSIFIER_FEATURES = ("ratio", "gbar")
 
-# Richer feature vector fed to the Isolation Forest outlier gate.
-OUTLIER_FEATURES = ("ratio", "gbar", "magnitude", "accel_std", "speed_mps")
+# Every feature the Isolation Forest gate can be built from, in canonical order.
+# This is the menu, not the selection — see OUTLIER_FEATURES below.
+OUTLIER_FEATURE_MENU = ("ratio", "gbar", "magnitude", "accel_std", "speed_mps")
+
+# What models fitted before migration 014 used: the whole menu. Kept as a named
+# constant because those models are still loadable and must be scored with the
+# feature set they were fitted on, not today's default.
+LEGACY_OUTLIER_FEATURES = OUTLIER_FEATURE_MENU
+
+# The default selection, and the reason this is configurable at all.
+#
+# `ratio`, `gbar` and `magnitude` are the features on which potholes separate
+# from everything else by 14-15x. An unsupervised outlier detector fitted on
+# them learns "pothole" and reports it as "outlier": measured over 140 rows the
+# gate removed 139, and on the collected `pothole_db` it flags 285 of 286
+# pothole-classed observations. The cluster member gate is
+# `sensor_class = 'pothole' AND sensor_is_outlier IS NOT TRUE`, so that is the
+# whole crowd pipeline starved to one row.
+#
+# Tuning `contamination` cannot fix it — below 0.05 the gate flags nothing but
+# potholes, so the dial runs between "no gate" and "no potholes". The answer is
+# a class-neutral feature set: `accel_std` (baseline road noise) and `speed_mps`
+# carry no pothole signal, so the gate flags roughly uniformly across classes
+# and keeps 122 of 140 at the unchanged contamination 0.1.
+#
+# Recorded in docs/phases/phase-2.1-fusion-engine-plan.md "Open items" #2.
+OUTLIER_FEATURES = ("accel_std", "speed_mps")
 
 
 def compute_ratio(magnitude: float | None, accel_std: float | None) -> float:
@@ -52,15 +77,42 @@ def outlier_features(
     accel_std: float | None,
     gbar_in_max: float | None,
     speed_mps: float | None,
+    names: tuple[str, ...] = OUTLIER_FEATURES,
 ) -> list[float]:
-    """The richer vector the Isolation Forest gate operates on."""
-    return [
-        compute_ratio(magnitude, accel_std),
-        gbar_in_max if gbar_in_max is not None else 0.0,
-        magnitude if magnitude is not None else 0.0,
-        accel_std if accel_std is not None else 0.0,
-        speed_mps if speed_mps is not None else 0.0,
-    ]
+    """The vector the Isolation Forest gate operates on, in `names` order.
+
+    `names` is explicit rather than read from settings so this module stays pure
+    and so a model is always scored with the feature set it was *fitted* with —
+    which is not necessarily today's configured default. Callers pass
+    `model.outlier_features`.
+    """
+    available = {
+        "ratio": compute_ratio(magnitude, accel_std),
+        "gbar": gbar_in_max if gbar_in_max is not None else 0.0,
+        "magnitude": magnitude if magnitude is not None else 0.0,
+        "accel_std": accel_std if accel_std is not None else 0.0,
+        "speed_mps": speed_mps if speed_mps is not None else 0.0,
+    }
+    return [available[n] for n in names]
+
+
+def parse_outlier_features(raw: str) -> tuple[str, ...]:
+    """Parse the comma-separated SENSOR_OUTLIER_FEATURES setting.
+
+    Rejects unknown names loudly at startup rather than at fit time: a typo here
+    would otherwise surface as a KeyError inside a background job, every hour,
+    with the gate silently never re-fitting.
+    """
+    names = tuple(part.strip() for part in raw.split(",") if part.strip())
+    if not names:
+        raise ValueError("SENSOR_OUTLIER_FEATURES is empty; give at least one feature")
+    unknown = [n for n in names if n not in OUTLIER_FEATURE_MENU]
+    if unknown:
+        raise ValueError(
+            f"Unknown outlier feature(s) {unknown}; "
+            f"valid names are {list(OUTLIER_FEATURE_MENU)}"
+        )
+    return names
 
 
 def severity(

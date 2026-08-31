@@ -32,6 +32,7 @@ from app.dependencies import DbPool, ViewerOrAbove
 from app.services.tile_service import (
     TileFilter,
     render_cluster_tile,
+    render_frame_tile,
     render_observation_tile,
 )
 
@@ -127,5 +128,34 @@ async def get_observation_tile(
         x=x,
         y=y,
         filters=TileFilter(asset_type=asset_type, window_days=window_days),
+    )
+    return _tile_response(tile)
+
+
+@router.get("/frames/{z}/{x}/{y}.mvt", response_class=Response)
+async def get_frame_tile(
+    pool: DbPool,
+    staff: ViewerOrAbove,
+    z: int = _tile_param("zoom"),
+    x: int = _tile_param("x"),
+    y: int = _tile_param("y"),
+    window_days: int = Query(default=0, ge=0),
+):
+    """Camera frames as raw points, with their detector score and fusion outcome.
+
+    No `asset_type`: `asset_frame` has no such column. A frame is a photograph of
+    the road, not an assertion about one asset class -- what it contains is the
+    detector's business.
+
+    `ViewerOrAbove` like the other tiles. This carries detector scores and device
+    ids, so it is staff-tier; it also does NOT serve the imagery, which stays
+    behind GET /api/v1/frames/{client_id}/image.
+    """
+    tile = await render_frame_tile(
+        pool,
+        z=z,
+        x=x,
+        y=y,
+        filters=TileFilter(window_days=window_days),
     )
     return _tile_response(tile)

@@ -46,7 +46,8 @@ MAX_ZOOM = 22
 
 LAYER_CLUSTERS = "clusters"
 LAYER_OBSERVATIONS = "observations"
-LAYERS = (LAYER_CLUSTERS, LAYER_OBSERVATIONS)
+LAYER_FRAMES = "frames"
+LAYERS = (LAYER_CLUSTERS, LAYER_OBSERVATIONS, LAYER_FRAMES)
 
 # Tile queries must never consume the whole pool: it is shared with the ingestion
 # path, and MapLibre issues 4-8 tile requests per pan. Constructed at import time,
@@ -114,6 +115,7 @@ FROM (
         c.confidence,
         c.observation_count,
         c.distinct_devices,
+        c.distinct_passes,
         c.source,
         (c.repaired_at IS NOT NULL) AS repaired,
         extract(epoch FROM c.last_seen)::bigint AS last_seen_epoch
@@ -198,6 +200,56 @@ WHERE t.geom IS NOT NULL
 """
 
 
+# Camera frames as raw points — the visual half of what the pipeline saw.
+#
+# The observations layer answers "where did a wheel hit something?". This answers
+# "where did the camera think it saw a defect?", which is a different set: 98.6%
+# of pothole-classed observations have no coincident frame at all, and the frames
+# outnumber the observations (5,615 vs 4,637 on the collected data).
+#
+# LEFT JOINed to fusion_pair because the interesting question about a camera
+# detection is not its score but whether it reached fusion. A frame that scored
+# 0.9 and never paired contributed nothing, and that is invisible from the score
+# alone. A frame pairs with at most one observation (the pairing search takes
+# ROW_NUMBER() = 1 per frame), so this cannot fan out.
+#
+# Deliberately NOT filtered on server_probability: the client decides what to
+# show, exactly as with the observations layer. A threshold here would bake one
+# operator's idea of "interesting" into the transport.
+_FRAME_TILE_SQL = f"""
+WITH bounds AS (SELECT ST_TileEnvelope($1, $2, $3) AS env)
+SELECT ST_AsMVT(t, '{LAYER_FRAMES}', {{extent}}, 'geom')
+FROM (
+    SELECT
+        ST_AsMVTGeom(
+            ST_Transform(f.geom::geometry, 3857), b.env,
+            {{extent}}, {{buffer}}, true
+        ) AS geom,
+        f.client_id,
+        f.device_probability,
+        f.server_probability,
+        f.server_model_id,
+        -- Box count rather than the boxes themselves: the geometry is
+        -- frame-relative and means nothing in map space, but "how many did it
+        -- find" is the number an operator reads.
+        COALESCE(jsonb_array_length(f.server_detections), 0) AS server_box_count,
+        (f.detected_at IS NOT NULL) AS detected,
+        p.fused_confidence,
+        (p.frame_client_id IS NOT NULL) AS paired,
+        COALESCE(p.is_primary, false) AS is_primary,
+        extract(epoch FROM f.ts_utc)::bigint AS ts_epoch
+    FROM asset_frame f
+    CROSS JOIN bounds b
+    LEFT JOIN fusion_pair p ON p.frame_client_id = f.client_id
+    WHERE ST_Transform(f.geom::geometry, 3857) && b.env
+      AND f.ts_utc >= now() - make_interval(days => $4)
+    ORDER BY f.server_probability DESC NULLS LAST, f.client_id
+    LIMIT $5
+) AS t
+WHERE t.geom IS NOT NULL
+"""
+
+
 def _format(sql: str) -> str:
     return sql.format(extent=settings.tile_extent, buffer=settings.tile_buffer)
 
@@ -272,6 +324,30 @@ async def render_observation_tile(
         _format(_OBSERVATION_TILE_SQL),
         z, x, y,
         filters.asset_type,
+        filters.resolved_window_days(),
+        settings.tile_max_features,
+    )
+
+
+async def render_frame_tile(
+    pool: asyncpg.Pool, *, z: int, x: int, y: int, filters: TileFilter
+) -> bytes:
+    """Render camera frames as raw points. Street-level zooms only.
+
+    Same zoom floor rationale as the observations layer: there are thousands of
+    these and they are individually meaningless zoomed out, so the endpoint
+    refuses rather than serving a tile that would render as a smear.
+    """
+    validate_tile_coords(z, x, y)
+    if z < settings.tile_frames_min_zoom:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The frames layer requires zoom >= {settings.tile_frames_min_zoom}.",
+        )
+    return await _run_tile_query(
+        pool,
+        _format(_FRAME_TILE_SQL),
+        z, x, y,
         filters.resolved_window_days(),
         settings.tile_max_features,
     )

@@ -1,86 +1,115 @@
-"""In-memory sliding-window rate limiter per device.
+"""Per-device sliding-window rate limiter, backed by `device_rate_limit`.
 
-This implementation uses a simple time-bucketed counter stored in a dict.
-It is suitable for a single-instance deployment. For horizontal scaling,
-replace with a Redis-backed implementation (e.g., redis INCR with TTL).
+Counts live in Postgres, not in process memory, because the Dockerfile runs
+`uvicorn --workers 2`. The previous implementation kept module-level dicts, so
+each worker enforced its own private ceiling: the effective limit was **doubled**
+and applied inconsistently depending on which worker a request happened to land
+on. The dict also never evicted a `device_id`, so it grew for the life of the
+process.
 
-Rate limits (from enterprise-architecture-plan.md §2.8 / roadmap §2.8):
-  - 100 events/hour per device
-  - 100 frames/hour per device
-  - HTTP 429 on excess
+`migrations/001_initial_schema.sql` has carried the `device_rate_limit` table for
+exactly this since the beginning; nothing had ever used it.
+
+Limits (`app/config.py`): `RATE_LIMIT_EVENTS_PER_HOUR` and
+`RATE_LIMIT_FRAMES_PER_HOUR`, both **5000/hour**. Sized for a real collection
+drive, not a demo — a drive's buffered data drains in one burst when the phone
+rejoins Wi-Fi, and the original 100/hour 429'd mid-drain and made the client
+retry the same rows forever.
+
+## Failure policy: fail OPEN, and say so
+
+If the quota query errors the request is allowed, with an ERROR logged. A device
+that cannot upload loses collected drive data permanently; a device that briefly
+overshoots its quota costs a few rows of disk. The asymmetry is not close, so
+this deliberately does not fail closed.
 """
 
-import time
-from collections import defaultdict
-from threading import Lock
+from __future__ import annotations
 
+import logging
+
+import asyncpg
 from fastapi import HTTPException
 
 from app.config import settings
 
-# Storage: { device_id: [(timestamp_seconds, count), ...] }
-# We use a simple 1-minute bucket approach for memory efficiency.
-_BUCKET_SECONDS = 60  # 1-minute buckets
-_WINDOW_SECONDS = 3600  # 1-hour sliding window
+logger = logging.getLogger(__name__)
 
-_event_buckets: dict[str, list[tuple[float, int]]] = defaultdict(list)
-_frame_buckets: dict[str, list[tuple[float, int]]] = defaultdict(list)
-_lock = Lock()
+_WINDOW = "1 hour"
+
+# One statement, because the increment and the total must not race each other.
+#
+# The sum is split deliberately. A data-modifying CTE and the rest of the same
+# statement share one snapshot, so a plain `SELECT sum(...)` here would NOT see
+# the row the CTE just wrote and would undercount by exactly this request. So the
+# current bucket's post-increment value comes back via RETURNING, and only
+# STRICTLY OLDER buckets are summed from the table.
+_CONSUME_SQL = f"""
+WITH bucket AS (
+    INSERT INTO device_rate_limit (device_id, resource, window_start, request_count)
+    VALUES ($1, $2, date_trunc('minute', now()), $3)
+    ON CONFLICT (device_id, resource, window_start)
+    DO UPDATE SET request_count = device_rate_limit.request_count + EXCLUDED.request_count
+    RETURNING request_count
+)
+SELECT
+    (SELECT request_count FROM bucket)
+    + COALESCE((
+        SELECT sum(request_count) FROM device_rate_limit
+        WHERE device_id = $1
+          AND resource = $2
+          AND window_start >  date_trunc('minute', now()) - interval '{_WINDOW}'
+          AND window_start <  date_trunc('minute', now())
+      ), 0) AS total
+"""
+
+# Buckets older than the window can never contribute again. Pruned by the
+# retention job rather than on the request path: a DELETE per upload would put a
+# write amplification on ingestion for no benefit.
+PRUNE_SQL = f"""
+DELETE FROM device_rate_limit
+WHERE window_start < date_trunc('minute', now()) - interval '{_WINDOW}'
+"""
+
+_LIMITS = {
+    "events": lambda: settings.rate_limit_events_per_hour,
+    "frames": lambda: settings.rate_limit_frames_per_hour,
+}
 
 
-def _get_current_count(buckets: list[tuple[float, int]], now: float) -> int:
-    """Sum counts in buckets within the sliding window."""
-    cutoff = now - _WINDOW_SECONDS
-    return sum(count for ts, count in buckets if ts >= cutoff)
-
-
-def _prune_and_increment(
-    bucket_store: dict[str, list[tuple[float, int]]], device_id: str, increment: int
-) -> int:
-    """Prune old buckets, add increment to current bucket, return total in window."""
-    now = time.time()
-    cutoff = now - _WINDOW_SECONDS
-    current_bucket_ts = int(now / _BUCKET_SECONDS) * _BUCKET_SECONDS
-
-    buckets = bucket_store[device_id]
-
-    # Prune expired buckets
-    bucket_store[device_id] = [(ts, c) for ts, c in buckets if ts >= cutoff]
-    buckets = bucket_store[device_id]
-
-    # Find or create current bucket
-    if buckets and buckets[-1][0] == current_bucket_ts:
-        buckets[-1] = (current_bucket_ts, buckets[-1][1] + increment)
-    else:
-        buckets.append((current_bucket_ts, increment))
-
-    return _get_current_count(buckets, now)
-
-
-def check_rate_limit(device_id: str, resource: str, count: int = 1) -> None:
-    """Check and enforce rate limit for a device.
+async def check_rate_limit(
+    pool: asyncpg.Pool, device_id: str, resource: str, count: int = 1
+) -> None:
+    """Consume `count` from this device's hourly allowance for `resource`.
 
     Args:
-        device_id: The X-Device-Id header value.
-        resource: Either "events" or "frames".
-        count: Number of items in this request (batch size for events).
+        pool: the shared asyncpg pool.
+        device_id: the X-Device-Id header value.
+        resource: "events" or "frames". Anything else is not limited.
+        count: items in this request (the batch size, for events).
 
     Raises:
-        HTTPException: 429 if the device has exceeded its hourly limit.
+        HTTPException: 429 once the device is over its hourly limit.
     """
-    if resource == "events":
-        limit = settings.rate_limit_events_per_hour
-        store = _event_buckets
-    elif resource == "frames":
-        limit = settings.rate_limit_frames_per_hour
-        store = _frame_buckets
-    else:
+    limit_for = _LIMITS.get(resource)
+    if limit_for is None:
+        return
+    limit = limit_for()
+
+    try:
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(_CONSUME_SQL, device_id, resource, count)
+    except (asyncpg.PostgresError, OSError) as exc:
+        # Fail open. See the module docstring: losing a drive is unrecoverable,
+        # overshooting a quota is not.
+        logger.error(
+            "Rate-limit accounting failed for device=%s resource=%s; ALLOWING the "
+            "request unmetered. %s",
+            device_id, resource, exc,
+        )
         return
 
-    with _lock:
-        current_total = _prune_and_increment(store, device_id, count)
-
-    if current_total > limit:
+    if total is not None and total > limit:
         raise HTTPException(
             status_code=429,
             detail={
@@ -88,14 +117,13 @@ def check_rate_limit(device_id: str, resource: str, count: int = 1) -> None:
                 "device_id": device_id,
                 "resource": resource,
                 "limit": limit,
-                "window": "1 hour",
-                "current": current_total,
+                "window": _WINDOW,
+                "current": int(total),
             },
         )
 
 
-def reset_rate_limits() -> None:
-    """Clear all rate limit state. Used in tests."""
-    with _lock:
-        _event_buckets.clear()
-        _frame_buckets.clear()
+async def reset_rate_limits(pool: asyncpg.Pool) -> None:
+    """Clear all counters. Tests only — this truncates the table."""
+    async with pool.acquire() as conn:
+        await conn.execute("TRUNCATE device_rate_limit")

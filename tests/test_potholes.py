@@ -6,6 +6,8 @@ Validation tests need no DB; the rest use the db_pool fixture to seed asset_clus
 
 import pytest
 
+from app.auth.tokens import create_access_token
+
 pytestmark = pytest.mark.asyncio
 
 V = {"Accept-Version": "v1"}
@@ -18,20 +20,22 @@ OUT_LAT, OUT_LON = 43.6532, -79.50  # west of minLon → outside bbox
 
 async def _insert_cluster(
     conn, cluster_id, *, lat=IN_LAT, lon=IN_LON, severity=0.5, confidence=0.8,
-    observation_count=3, distinct_devices=2, repaired=False,
+    observation_count=3, distinct_devices=2, repaired=False, distinct_passes=0,
 ):
     await conn.execute(
         """
         INSERT INTO asset_cluster (
             cluster_id, asset_type, centroid, severity, confidence,
-            observation_count, distinct_devices, last_seen, source, repaired_at
+            observation_count, distinct_devices, last_seen, source, repaired_at,
+            distinct_passes
         ) VALUES (
             $1, 'pothole', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
-            $4, $5, $6, $7, now(), 'crowd', CASE WHEN $8 THEN now() ELSE NULL END
+            $4, $5, $6, $7, now(), 'crowd', CASE WHEN $8 THEN now() ELSE NULL END,
+            $9
         )
         """,
         cluster_id, lon, lat, severity, confidence, observation_count,
-        distinct_devices, repaired,
+        distinct_devices, repaired, distinct_passes,
     )
 
 
@@ -203,17 +207,175 @@ async def test_postgis_error_becomes_400_not_500(client, db_pool, monkeypatch):
     """
     from app.services import cluster_query_service
 
-    # Consumes the same eight parameters so asyncpg's arity check still passes.
+    # Consumes the same nine parameters so asyncpg's arity check still passes.
+    # ($8 is min_passes, added alongside min_devices as the second corroboration
+    # floor; $9 is the row cap.)
     exploding_sql = """
         SELECT 1 / 0 AS boom
         WHERE $1::int IS NOT NULL AND $2::int IS NOT NULL
           AND $3::float8 IS NOT NULL AND $4::float8 IS NOT NULL
           AND $5::float8 IS NOT NULL AND $6::float8 IS NOT NULL
           AND ($7::timestamptz IS NULL OR TRUE)
-          AND $8::int IS NOT NULL
+          AND $8::int IS NOT NULL AND $9::int IS NOT NULL
     """
     monkeypatch.setattr(cluster_query_service, "_INDIVIDUAL_SQL", exploding_sql)
 
     resp = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16", headers=V)
     assert resp.status_code == 400
     assert "geographic area" in resp.json()["detail"]
+
+
+# ── min_devices override (Phase 2.7 / device-gate sweep) ─────────────────────
+#
+# The corroboration floor exists to suppress single-user noise, but the right
+# value has never been measured. These pin the parameter that lets it be.
+
+
+async def test_min_devices_omitted_uses_the_configured_default(db_pool, client):
+    """The frozen v1 contract: a client that sends no min_devices sees no change.
+
+    The Android client does not send it. If this ever fails, every deployed
+    phone's map has silently changed what it shows.
+    """
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_solo", distinct_devices=1)
+        await _insert_cluster(conn, "clu_pair", distinct_devices=2)
+
+    r = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16", headers=V)
+    assert r.status_code == 200
+    ids = {i["id"] for i in r.json()["items"]}
+    # Default CLUSTER_MIN_DISTINCT_DEVICES is 2, so the single-device one is hidden.
+    assert ids == {"clu_pair"}
+
+
+async def test_min_devices_1_reveals_single_device_clusters(db_pool, client):
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_solo", distinct_devices=1)
+        await _insert_cluster(conn, "clu_pair", distinct_devices=2)
+
+    r = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_devices=1", headers=V)
+    assert r.status_code == 200
+    assert {i["id"] for i in r.json()["items"]} == {"clu_solo", "clu_pair"}
+
+
+async def test_min_devices_can_tighten_as_well_as_loosen(db_pool, client):
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_pair", distinct_devices=2)
+        await _insert_cluster(conn, "clu_many", distinct_devices=5)
+
+    r = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_devices=4", headers=V)
+    assert {i["id"] for i in r.json()["items"]} == {"clu_many"}
+
+
+async def test_min_devices_applies_to_the_aggregate_zoom_too(db_pool, client):
+    """Low zoom returns grid bins, and the floor must filter what feeds them.
+
+    Otherwise zooming out would reveal, as a count, exactly the clusters the
+    floor hides at street zoom.
+    """
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_solo", distinct_devices=1)
+
+    strict = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=10", headers=V)
+    assert strict.json()["items"] == []
+
+    loose = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=10&min_devices=1", headers=V)
+    items = loose.json()["items"]
+    assert len(items) == 1
+    assert items[0]["count"] == 1
+
+
+async def test_min_devices_rejects_negative(client):
+    r = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_devices=-1", headers=V)
+    assert r.status_code == 422
+
+
+async def test_min_devices_on_staff_detail_path(db_pool, client):
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_solo", distinct_devices=1)
+
+    token, _ = create_access_token(user_id="u1", org_id="org_x", role="staff")
+    auth = {**V, "Authorization": f"Bearer {token}"}
+    hidden = await client.get(f"/api/v1/potholes/detail?bbox={BBOX}&zoom=16", headers=auth)
+    assert hidden.json()["items"] == []
+
+    shown = await client.get(
+        f"/api/v1/potholes/detail?bbox={BBOX}&zoom=16&min_devices=1", headers=auth
+    )
+    assert [i["id"] for i in shown.json()["items"]] == ["clu_solo"]
+
+
+# ── Corroboration by passes ─────────────────────────────────────────────────
+#
+# The paper integrates "from multiple users AND/OR multiple passes of any road
+# segment". These pin the second, independent floor.
+
+
+async def test_a_three_pass_single_device_cluster_is_visible(db_pool, client):
+    """One car, three drives — the paper's own experimental design.
+
+    Hidden by the device gate (it will only ever be 1 device) and visible by the
+    pass gate. This is the case the server previously could not express at all.
+    """
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_3pass", distinct_devices=1, distinct_passes=3)
+
+    hidden = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_passes=99", headers=V)
+    assert hidden.json()["items"] == []
+
+    shown = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_passes=3", headers=V)
+    assert [i["id"] for i in shown.json()["items"]] == ["clu_3pass"]
+
+
+async def test_either_floor_is_sufficient(db_pool, client):
+    """The two floors are independent, not conjunctive.
+
+    A multi-device cluster stays visible however the pass floor is set, and vice
+    versa — otherwise adding the pass gate would have silently *narrowed* the
+    existing public contract.
+    """
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_devices", distinct_devices=2, distinct_passes=0)
+        await _insert_cluster(
+            conn, "clu_passes", lat=IN_LAT + 0.001, distinct_devices=1, distinct_passes=5
+        )
+
+    r = await client.get(
+        f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_devices=2&min_passes=5", headers=V
+    )
+    assert {i["id"] for i in r.json()["items"]} == {"clu_devices", "clu_passes"}
+
+
+async def test_pass_floor_still_excludes_a_single_drive_past(db_pool, client):
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_1pass", distinct_devices=1, distinct_passes=1)
+
+    r = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_passes=3", headers=V)
+    assert r.json()["items"] == []
+
+
+async def test_staff_detail_surfaces_passes_and_span(db_pool, client):
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_3pass", distinct_devices=1, distinct_passes=3)
+        await conn.execute(
+            "UPDATE asset_cluster SET member_span_s = 345600 WHERE cluster_id = 'clu_3pass'"
+        )
+
+    token, _ = create_access_token(user_id="u1", org_id="org_x", role="staff")
+    auth = {**V, "Authorization": f"Bearer {token}"}
+    r = await client.get(
+        f"/api/v1/potholes/detail?bbox={BBOX}&zoom=16&min_passes=3", headers=auth
+    )
+    item = r.json()["items"][0]
+    assert item["distinct_passes"] == 3
+    assert item["member_span_s"] == 345600
+
+
+async def test_public_tier_still_returns_locations_only(db_pool, client):
+    """Adding fields to the staff model must not leak them into the public tier."""
+    async with db_pool.acquire() as conn:
+        await _insert_cluster(conn, "clu_3pass", distinct_devices=1, distinct_passes=3)
+
+    r = await client.get(f"/api/v1/potholes?bbox={BBOX}&zoom=16&min_passes=3", headers=V)
+    item = r.json()["items"][0]
+    assert set(item) == {"type", "id", "lat", "lon"}

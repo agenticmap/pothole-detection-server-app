@@ -42,10 +42,17 @@ MAX_ITEMS = 1000
 
 # Shared public-visibility filter. $1=min_devices $2=window_days
 # $3=min_lon $4=min_lat $5=max_lon $6=max_lat $7=since (timestamptz|NULL)
+# $8=min_passes
+#
+# Two INDEPENDENT corroboration floors, either sufficient. Devices is the stricter
+# multi-user claim; passes is what Sattar et al. actually integrate over -- "multiple
+# users AND/OR multiple passes of any road segment" -- and their own five-survey
+# validation was a single phone. Requiring devices alone makes a single-vehicle
+# survey campaign invisible, which is precisely the campaign the paper ran.
 _FILTER = """
     asset_type = 'pothole'
     AND repaired_at IS NULL
-    AND distinct_devices >= $1
+    AND (distinct_devices >= $1 OR distinct_passes >= $8)
     AND last_seen >= now() - make_interval(days => $2)
     AND centroid && ST_MakeEnvelope($3, $4, $5, $6, 4326)::geography
     AND ($7::timestamptz IS NULL OR updated_at > $7)
@@ -56,14 +63,15 @@ SELECT
     cluster_id,
     ST_Y(centroid::geometry) AS lat,
     ST_X(centroid::geometry) AS lon,
-    severity, confidence, observation_count, distinct_devices, last_seen, source
+    severity, confidence, observation_count, distinct_devices, distinct_passes,
+    member_span_s, last_seen, source
 FROM asset_cluster
 WHERE {_FILTER}
 ORDER BY cluster_id
-LIMIT $8
+LIMIT $9
 """
 
-# $8 = grid cell size in degrees (derived from zoom by the caller).
+# $9 = grid cell size in degrees (derived from zoom by the caller).
 _AGGREGATE_SQL = f"""
 SELECT
     avg(ST_Y(centroid::geometry)) AS centroid_lat,
@@ -72,7 +80,7 @@ SELECT
     max(severity) AS max_severity
 FROM asset_cluster
 WHERE {_FILTER}
-GROUP BY ST_SnapToGrid(centroid::geometry, $8)
+GROUP BY ST_SnapToGrid(centroid::geometry, $9)
 ORDER BY count DESC
 LIMIT {MAX_ITEMS}
 """
@@ -88,13 +96,35 @@ async def query_potholes(
     zoom: int,
     since: datetime | None,
     detail: bool = False,
+    min_devices: int | None = None,
+    min_passes: int | None = None,
 ) -> PotholesResponse | PublicPotholesResponse:
     """Return confirmed potholes within the bbox, aggregated by zoom.
 
     ``detail=False`` (public) surfaces locations only; ``detail=True`` (staff)
     surfaces the full per-cluster fields.
+
+    ``min_devices`` overrides the corroboration floor for this request only.
+    ``None`` means "use ``CLUSTER_MIN_DISTINCT_DEVICES``", which is what every
+    existing caller gets — the Android client sends no such parameter, so its
+    behaviour is unchanged.
+
+    The floor exists to suppress single-user noise, but the right value is an
+    empirical question nobody has answered: on the 2026-08 drives NO cluster has
+    two distinct devices, so the shipped default of 2 makes this endpoint return
+    an empty list while the operator dashboard shows 25 clusters from the same
+    table. Making it a parameter is what lets `scripts/device_gate_eval.py`
+    measure the trade rather than argue about it.
+
+    ``min_passes`` is the second, independent floor, and the one the paper
+    actually uses: a cluster is visible if EITHER enough distinct devices OR
+    enough distinct passes contributed. One car over the same defect on three
+    separate days satisfies the second and never the first.
     """
-    min_devices = settings.cluster_min_distinct_devices
+    if min_devices is None:
+        min_devices = settings.cluster_min_distinct_devices
+    if min_passes is None:
+        min_passes = settings.cluster_min_distinct_passes
     window_days = settings.cluster_window_days
     generated_at = datetime.now(UTC).isoformat()
 
@@ -106,7 +136,7 @@ async def query_potholes(
                 rows = await conn.fetch(
                     _INDIVIDUAL_SQL,
                     min_devices, window_days, min_lon, min_lat, max_lon, max_lat, since,
-                    MAX_ITEMS,
+                    min_passes, MAX_ITEMS,
                 )
             else:
                 # One tile-width in degrees at this zoom; coarser cells at lower zoom.
@@ -114,7 +144,7 @@ async def query_potholes(
                 rows = await conn.fetch(
                     _AGGREGATE_SQL,
                     min_devices, window_days, min_lon, min_lat, max_lon, max_lat, since,
-                    cell_deg,
+                    min_passes, cell_deg,
                 )
     except asyncpg.exceptions.PostgresError as exc:
         # A degenerate bbox can make ST_MakeEnvelope(...)::geography raise — e.g. "Antipodal
@@ -147,6 +177,8 @@ async def query_potholes(
                         confidence=r["confidence"],
                         observation_count=r["observation_count"],
                         distinct_devices=r["distinct_devices"],
+                        distinct_passes=r["distinct_passes"],
+                        member_span_s=r["member_span_s"],
                         last_seen=last_seen.isoformat() if last_seen else None,
                         source=r["source"],
                     )

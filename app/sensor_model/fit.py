@@ -58,6 +58,7 @@ def fit_sensor_model(
     contamination: float = 0.1,
     random_state: int = 42,
     severity_calib: SeverityCalibration,
+    outlier_feature_names: tuple[str, ...] = feat.OUTLIER_FEATURES,
     engine_prefix: str = "sensor_gmm_v1",
 ) -> tuple[SensorModel, bytes]:
     """Fit a SensorModel from observation rows.
@@ -76,7 +77,8 @@ def fit_sensor_model(
     xo = np.array(
         [
             feat.outlier_features(
-                r["magnitude"], r["accel_std"], r["gbar_in_max"], r["speed_mps"]
+                r["magnitude"], r["accel_std"], r["gbar_in_max"], r["speed_mps"],
+                outlier_feature_names,
             )
             for r in rows
         ],
@@ -148,6 +150,7 @@ def fit_sensor_model(
         gmm=gmm,
         iforest=iforest,
         components=components,
+        outlier_features=tuple(outlier_feature_names),
     )
 
     buf = io.BytesIO()

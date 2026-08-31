@@ -90,6 +90,25 @@ async def get_potholes(
     bbox: str = Query(..., description="minLon,minLat,maxLon,maxLat"),
     zoom: int = Query(..., ge=0, le=28),
     since: str | None = Query(default=None, description="ISO-8601 timestamp for incremental fetch"),
+    min_devices: int | None = Query(
+        default=None,
+        ge=0,
+        description=(
+            "Corroboration floor: only clusters seen by at least this many distinct "
+            "devices. Omitted (the default) uses CLUSTER_MIN_DISTINCT_DEVICES. "
+            "Present so the value can be measured rather than assumed -- see "
+            "scripts/device_gate_eval.py."
+        ),
+    ),
+    min_passes: int | None = Query(
+        default=None,
+        ge=0,
+        description=(
+            "Corroboration floor by distinct (device, drive) passes -- the unit the "
+            "source paper integrates over. A cluster is returned if it meets EITHER "
+            "this or min_devices. Omitted uses CLUSTER_MIN_DISTINCT_PASSES."
+        ),
+    ),
 ):
     """Public: confirmed pothole LOCATIONS within the bbox, aggregated by zoom."""
     min_lon, min_lat, max_lon, max_lat = _parse_bbox(bbox)
@@ -103,6 +122,8 @@ async def get_potholes(
         zoom=zoom,
         since=since_dt,
         detail=False,
+        min_devices=min_devices,
+        min_passes=min_passes,
     )
 
 
@@ -114,6 +135,25 @@ async def get_potholes_detail(
     bbox: str = Query(..., description="minLon,minLat,maxLon,maxLat"),
     zoom: int = Query(..., ge=0, le=28),
     since: str | None = Query(default=None, description="ISO-8601 timestamp for incremental fetch"),
+    min_devices: int | None = Query(
+        default=None,
+        ge=0,
+        description=(
+            "Corroboration floor: only clusters seen by at least this many distinct "
+            "devices. Omitted (the default) uses CLUSTER_MIN_DISTINCT_DEVICES. "
+            "Present so the value can be measured rather than assumed -- see "
+            "scripts/device_gate_eval.py."
+        ),
+    ),
+    min_passes: int | None = Query(
+        default=None,
+        ge=0,
+        description=(
+            "Corroboration floor by distinct (device, drive) passes -- the unit the "
+            "source paper integrates over. A cluster is returned if it meets EITHER "
+            "this or min_devices. Omitted uses CLUSTER_MIN_DISTINCT_PASSES."
+        ),
+    ),
 ):
     """Staff-only: confirmed potholes WITH severity, confidence, corroboration.
 
@@ -131,4 +171,6 @@ async def get_potholes_detail(
         zoom=zoom,
         since=since_dt,
         detail=True,
+        min_devices=min_devices,
+        min_passes=min_passes,
     )

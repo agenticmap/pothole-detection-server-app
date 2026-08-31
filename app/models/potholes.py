@@ -29,6 +29,22 @@ class PotholeItem(BaseModel):
     confidence: float | None = None
     observation_count: int = Field(..., ge=0)
     distinct_devices: int = Field(..., ge=0)
+    distinct_passes: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Distinct (device, drive) passes contributing to this pothole. The "
+            "paper's unit of corroboration -- one car over the same defect on "
+            "three days is three passes and one device."
+        ),
+    )
+    member_span_s: float | None = Field(
+        default=None,
+        description=(
+            "Seconds between the earliest and latest contributing detection. A "
+            "span of a few seconds means one drive-past, not corroboration."
+        ),
+    )
     last_seen: str | None = Field(default=None, description="ISO-8601 timestamp.")
     source: str | None = None
 

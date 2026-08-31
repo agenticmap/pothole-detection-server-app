@@ -15,6 +15,7 @@ import logging
 import asyncpg
 import joblib
 
+from app.sensor_model.features import LEGACY_OUTLIER_FEATURES
 from app.sensor_model.model import (
     SensorModel,
     SeverityCalibration,
@@ -27,9 +28,9 @@ _INSERT_MODEL_SQL = """
 INSERT INTO sensor_model (
     model_version, n_observations, k, bic,
     standardization_jsonb, components_jsonb, class_map_jsonb, severity_calib_jsonb,
-    model_blob, sklearn_version, is_active
+    model_blob, sklearn_version, outlier_features_jsonb, is_active
 )
-VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, TRUE)
+VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb, TRUE)
 """
 
 
@@ -51,17 +52,19 @@ async def save_model(pool: asyncpg.Pool, model: SensorModel, blob: bytes) -> Non
                 json.dumps(model.severity_calib.to_jsonb()),    # $8
                 blob,                                      # $9
                 model.sklearn_version,                     # $10
+                json.dumps(list(model.outlier_features)),  # $11
             )
     logger.info(
-        "Saved active sensor_model %s (k=%d, n=%d, bic=%.2f)",
+        "Saved active sensor_model %s (k=%d, n=%d, bic=%.2f, outlier_features=%s)",
         model.model_version, model.k, model.n_observations, model.bic or float("nan"),
+        ",".join(model.outlier_features),
     )
 
 
 _SELECT_ACTIVE_SQL = """
 SELECT model_version, n_observations, k, bic,
        standardization_jsonb, components_jsonb, class_map_jsonb, severity_calib_jsonb,
-       model_blob, sklearn_version
+       model_blob, sklearn_version, outlier_features_jsonb
 FROM sensor_model
 WHERE is_active
 LIMIT 1
@@ -92,6 +95,12 @@ async def load_active_model(pool: asyncpg.Pool) -> SensorModel | None:
     if row["model_blob"] is not None:
         gmm, iforest = joblib.load(io.BytesIO(row["model_blob"]))
 
+    # NULL means the row predates migration 014, so it was fitted on the legacy
+    # five-feature set. Resolving it to today's configured default instead would
+    # score an old model with a feature vector it has never seen.
+    raw_features = _loads(row["outlier_features_jsonb"])
+    outlier_features = tuple(raw_features) if raw_features else LEGACY_OUTLIER_FEATURES
+
     return SensorModel(
         model_version=row["model_version"],
         standardization=standardization,
@@ -104,4 +113,5 @@ async def load_active_model(pool: asyncpg.Pool) -> SensorModel | None:
         gmm=gmm,
         iforest=iforest,
         components=components,
+        outlier_features=outlier_features,
     )

@@ -49,7 +49,7 @@ async def ingest_events(
         )
 
     # Rate limit check (pre-insert to avoid wasted DB work)
-    check_rate_limit(device_id, "events", count=len(body.events))
+    await check_rate_limit(pool, device_id, "events", count=len(body.events))
 
     # Insert events via service layer
     accepted, rejected = await insert_events(pool, device_id, body.events)

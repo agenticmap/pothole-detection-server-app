@@ -15,7 +15,7 @@ Idempotency:
 
 import json
 import logging
-from typing import Annotated, Union
+from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -38,9 +38,7 @@ async def ingest_frame(
     pool: DbPool,
     device_id: DeviceId,
     version: ApiVersion,
-    metadata: Annotated[
-        Union[UploadFile, str], File(description="JSON metadata part")
-    ],
+    metadata: Annotated[UploadFile | str, File(description="JSON metadata part")],
     frame: Annotated[UploadFile, File(description="JPEG image file")],
 ):
     """Receive a single camera frame with metadata from a mobile device.
@@ -52,7 +50,7 @@ async def ingest_frame(
     or Supabase Storage). Metadata is inserted into the asset_frame table.
     """
     # Rate limit check
-    check_rate_limit(device_id, "frames", count=1)
+    await check_rate_limit(pool, device_id, "frames", count=1)
 
     # ── Parse metadata JSON ───────────────────────────────────────────────────
     # The metadata part is accepted both with and without a Content-Disposition

@@ -1,5 +1,6 @@
 """Shared test fixtures — re-exported from tests/__init__.py for clarity."""
 
+import os
 from datetime import datetime
 from urllib.parse import urlsplit
 
@@ -27,12 +28,27 @@ def _database_name(dsn: str) -> str:
     return urlsplit(dsn).path.lstrip("/")
 
 
+def _in_ci() -> bool:
+    """True when running on a CI runner.
+
+    Locally, an unreachable Postgres skips the DB-backed tests so the pure-unit
+    suite still runs without `docker compose up`. On CI that leniency is a trap:
+    a service container that never came up would report a green run with most of
+    the suite silently skipped, which is the exact shape of failure CI exists to
+    catch. There, an unreachable database is an error, not a reason to say nothing.
+
+    `CI` is set by GitHub Actions, GitLab, CircleCI and Travis alike.
+    """
+    return os.environ.get("CI", "").lower() in {"1", "true", "yes"}
+
+
 @pytest_asyncio.fixture
 async def db_pool():
     """A real asyncpg pool with migrations applied.
 
     Skips the test if a local Postgres isn't reachable (so unit tests still run
-    in environments without a database).
+    in environments without a database) -- except on CI, where an unreachable
+    database is a failure. See _in_ci().
     """
     db_name = _database_name(settings.database_url)
     if db_name not in _ALLOWED_TEST_DATABASES:
@@ -44,17 +60,20 @@ async def db_pool():
         )
     try:
         pool = await create_pool()
-    except Exception as e:  # noqa: BLE001 — any connection failure → skip
-        pytest.skip(
+    except Exception as e:  # noqa: BLE001 — any connection failure → skip, or fail on CI
+        message = (
             f"Postgres not available: {e}\n"
             f"If {db_name!r} does not exist yet, create it once with:\n"
             f"  docker compose exec postgres createdb -U pothole {db_name}"
         )
+        if _in_ci():
+            pytest.fail(message)
+        pytest.skip(message)
     await run_migrations(pool)
     # Clean slate for fusion/sensor tables so tests are independent.
     async with pool.acquire() as conn:
         await conn.execute(
-            "TRUNCATE repair_log, refresh_token, org_member, staff_user, org, "
+            "TRUNCATE device_rate_limit, repair_log, refresh_token, org_member, staff_user, org, "
             "observation_cluster_link, asset_cluster, cluster_run, "
             "model_disagreement, frame_box, frame_label, fusion_pair, fusion_run, sensor_model, "
             "asset_frame, asset_observation RESTART IDENTITY CASCADE"

@@ -5,6 +5,7 @@ scoring is pure scipy math over stored components).
 """
 
 import numpy as np
+import pytest
 from sklearn.ensemble import IsolationForest
 
 from app.sensor_model.model import (
@@ -77,3 +78,39 @@ def test_iforest_flags_extreme_outlier():
     m = _model(iforest=iforest)
     res = score_observation(m, magnitude=500.0, accel_std=0.01, gbar_in_max=400.0, speed_mps=0.0)
     assert res.is_outlier is True
+
+
+def test_scores_with_the_models_own_feature_set():
+    # A gate fitted on the class-neutral pair must be fed exactly those two, in
+    # that order -- not today's configured default and not the legacy five.
+    rng = np.random.default_rng(1)
+    normal = rng.normal(loc=[1.0, 12.0], scale=[0.2, 2.0], size=(300, 2))
+    iforest = IsolationForest(contamination=0.05, random_state=42).fit(normal)
+    m = _model(iforest=iforest)
+    m.outlier_features = ("accel_std", "speed_mps")
+
+    typical = score_observation(
+        m, magnitude=6.0, accel_std=1.0, gbar_in_max=6.0, speed_mps=12.0
+    )
+    # A huge pothole with an ordinary noise floor and speed is NOT an outlier
+    # under this gate -- that is the entire point of the change.
+    assert typical.is_outlier is False
+    assert typical.sensor_class == CLASS_POTHOLE
+
+    weird = score_observation(
+        m, magnitude=6.0, accel_std=40.0, gbar_in_max=6.0, speed_mps=90.0
+    )
+    assert weird.is_outlier is True
+
+
+def test_score_refuses_a_feature_set_the_forest_was_not_fitted_on():
+    # Changing SENSOR_OUTLIER_FEATURES without re-fitting must fail loudly
+    # rather than hand sklearn a differently-shaped vector.
+    rng = np.random.default_rng(2)
+    iforest = IsolationForest(contamination=0.05, random_state=42).fit(
+        rng.normal(size=(100, 5))
+    )
+    m = _model(iforest=iforest)
+    m.outlier_features = ("accel_std", "speed_mps")  # 2, but the forest wants 5
+    with pytest.raises(ValueError, match="fitted on 5 outlier feature"):
+        score_observation(m, magnitude=6.0, accel_std=1.0, gbar_in_max=6.0, speed_mps=12.0)

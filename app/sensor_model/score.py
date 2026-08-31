@@ -72,10 +72,24 @@ def score_observation(
     )
 
     # ── Isolation Forest outlier gate ─────────────────────────────────────────
+    # Built from the feature set this model was FITTED on, not the configured
+    # default: changing SENSOR_OUTLIER_FEATURES without re-fitting must fail
+    # loudly rather than feed sklearn a differently-shaped vector.
     is_outlier = False
     if model.iforest is not None:
+        expected = getattr(model.iforest, "n_features_in_", None)
+        if expected is not None and expected != len(model.outlier_features):
+            raise ValueError(
+                f"sensor_model {model.model_version} was fitted on {expected} outlier "
+                f"feature(s) but its recorded set {list(model.outlier_features)} has "
+                f"{len(model.outlier_features)}. Re-fit before scoring."
+            )
         xo = np.asarray(
-            [feat.outlier_features(magnitude, accel_std, gbar_in_max, speed_mps)],
+            [
+                feat.outlier_features(
+                    magnitude, accel_std, gbar_in_max, speed_mps, model.outlier_features
+                )
+            ],
             dtype=np.float64,
         )
         is_outlier = bool(model.iforest.predict(xo)[0] == -1)
