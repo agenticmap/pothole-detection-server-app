@@ -313,10 +313,34 @@ export function refreshLegend(root: ParentNode = document): void {
  */
 const COMPACT_BELOW_PX = 700;
 
+/**
+ * Publish the height of MapLibre's bottom-right control stack so the legend can
+ * sit clear of it.
+ *
+ * Both are absolutely positioned in the same corner, and the legend was winning:
+ * measured at 1920x889 it spanned y 653-865 and covered the zoom buttons
+ * (765-823) outright -- Playwright reported `.legend intercepts pointer events`
+ * when asked to click zoom-in -- as well as the attribution strip (843-867).
+ * The second of those is not cosmetic: the OSM/Protomaps attribution has to stay
+ * visible to satisfy the basemap licence.
+ *
+ * Measured rather than hardcoded because the stack's height is not constant --
+ * the attribution wraps to two lines on a narrow pane, and the compact/expanded
+ * attribution toggle changes it at runtime.
+ */
+function publishControlStackHeight(mapContainer: HTMLElement): void {
+  const stack = mapContainer.querySelector('.maplibregl-ctrl-bottom-right');
+  // Fallback keeps the legend clear on the first frame, before MapLibre has
+  // added its controls.
+  const height = stack ? Math.ceil(stack.getBoundingClientRect().height) : 116;
+  mapContainer.style.setProperty('--map-ctrl-bottom-h', `${height}px`);
+}
+
 export function installLegendResponsiveness(
   mapContainer: HTMLElement,
   onResize: () => void,
 ): () => void {
+  publishControlStackHeight(mapContainer);
   const observer = new ResizeObserver((entries) => {
     const width = entries[0]?.contentRect.width ?? mapContainer.clientWidth;
     const next = width < COMPACT_BELOW_PX;
@@ -333,7 +357,21 @@ export function installLegendResponsiveness(
     // MapLibre does not watch its container, so without this the canvas keeps the
     // old size and the map appears stretched when the panel opens.
     onResize();
+    publishControlStackHeight(mapContainer);
   });
   observer.observe(mapContainer);
-  return () => observer.disconnect();
+
+  // The controls are added asynchronously by MapLibre, after this runs, and the
+  // attribution can re-wrap without the pane resizing -- so a container resize
+  // is not the only thing that changes the stack height.
+  const stack = mapContainer.querySelector('.maplibregl-ctrl-bottom-right');
+  const stackObserver = stack
+    ? new ResizeObserver(() => publishControlStackHeight(mapContainer))
+    : null;
+  if (stack && stackObserver) stackObserver.observe(stack);
+
+  return () => {
+    observer.disconnect();
+    stackObserver?.disconnect();
+  };
 }

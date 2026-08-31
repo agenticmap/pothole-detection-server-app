@@ -32,15 +32,22 @@ export interface SeverityTier {
  *
  *     severity = clamp(severity_scale * magnitude / max(speed, severity_speed_ref), 0, 1)
  *
- * with `severity_scale = 2.0` and `severity_speed_ref = 5.0` (app/config.py).
+ * with `severity_speed_ref = 5.0` (app/config.py).
  * An earlier version of this file described severity as "unbounded in principle,
  * in practice single digits" and put the floors at 0 / 1.5 / 3 / 5 — above the
  * ceiling. Every real cluster therefore painted in the first tier at the smallest
  * radius, and three of the four ramp colours were unreachable.
  *
- * These floors are still a first cut: quartiles of the possible range, not of the
- * observed distribution. They should be recalibrated against real drive data
- * before a pilot — that caveat is more true now, not less.
+ * The floors below are quartiles of the *possible* range. They now work, but only
+ * because the other half of the problem was fixed on the server: `severity_scale`
+ * was 2.0, which saturates at ratio >= 0.5 — the MINIMUM of the observed pothole
+ * distribution — so every cluster scored exactly 1.0 and the ramp collapsed into
+ * the top tier instead of the bottom one. Measured on the 2026-08 drives it is
+ * now 0.25, fitted to p95 of magnitude/max(speed, 5) over cluster-admitted
+ * potholes, which spreads 25 clusters across all four tiers as 2 / 12 / 9 / 2.
+ *
+ * The lesson to carry: these floors and `severity_scale` are one calibration in
+ * two files. Changing either alone re-breaks the ramp.
  */
 export const SEVERITY_TIERS: readonly SeverityTier[] = [
   { min: 0, label: 'Low', varName: '--severity-1', radius: 5 },

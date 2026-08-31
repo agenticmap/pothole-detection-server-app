@@ -52,6 +52,10 @@ export interface ClusterDetailResponse {
   confidence: number | null;
   observation_count: number;
   distinct_devices: number;
+  /** Distinct (device, drive) passes — the paper's unit of corroboration. */
+  distinct_passes?: number;
+  /** Seconds between earliest and latest member; seconds means one drive-past. */
+  member_span_s?: number | null;
   last_seen: string | null;
   source: string | null;
   repaired_at: string | null;

@@ -28,6 +28,7 @@ import {
   severityColorExpression,
   severityRadiusExpression,
 } from '../severity.ts';
+import { cssVar } from '../tokens.ts';
 
 export const SOURCE_ID = 'clusters';
 export const SOURCE_LAYER = 'clusters';
@@ -127,6 +128,164 @@ export function aggregateLayer(): CircleLayerSpecification {
       'circle-opacity': 0.8,
       'circle-stroke-width': 1.5,
       'circle-stroke-color': haloColor(),
+    },
+  };
+}
+
+// ── Raw observations ────────────────────────────────────────────────────────
+//
+// A second source, deliberately separate from the clusters one: it is a
+// different endpoint with a different schema and a hard server-side zoom floor.
+//
+// Why it exists at all. A cluster needs `cluster_min_points` (3) admitted
+// detections within `cluster_eps_m` (25 m). On the 2026-08 drives, 166
+// observations are admitted and only 110 land in a cluster — so a third of the
+// potholes the sensor actually reported are, without this layer, visible at no
+// zoom on any surface. "Show the clusters" and "show what was reported" are not
+// the same request.
+//
+// The tile endpoint applies NO class or outlier filter (app/services/
+// tile_service.py) — it emits sensor_class / sensor_is_outlier / sensor_p_pothole
+// and lets the client decide. That is what makes the outlier gate inspectable
+// from the map, which matters because that gate is the single biggest lever on
+// what reaches the crowd pipeline.
+
+export const SOURCE_OBSERVATIONS = 'observations';
+export const SOURCE_LAYER_OBSERVATIONS = 'observations';
+export const LAYER_OBSERVATIONS = 'observations-points';
+
+/**
+ * Server-side minimum zoom for the observations endpoint.
+ *
+ * Mirrors `tile_observations_min_zoom` in app/config.py. This MUST be set as the
+ * source's `minzoom`: below it the endpoint returns HTTP 400, and an errored
+ * MapLibre tile never retries — so a single request at z14 leaves a permanently
+ * dead tile that only a source rebuild clears.
+ */
+export const OBSERVATIONS_MIN_ZOOM = 15;
+
+/**
+ * Source maxzoom for observations. MUST be > OBSERVATIONS_MIN_ZOOM: a vector
+ * source with maxzoom below its minzoom has an empty range and silently never
+ * loads a tile. It cannot reuse the clusters' SOURCE_MAX_ZOOM (14) for exactly
+ * that reason.
+ *
+ * 16 means real tiles at z15-16 and client-side overzoom above, which keeps the
+ * PostGIS query count down at the street zooms where this layer is used.
+ */
+export const OBSERVATIONS_MAX_ZOOM = 16;
+
+/** True when the sensor model's outlier gate rejected this observation. */
+const IS_OUTLIER: ExpressionSpecification = ['coalesce', ['get', 'sensor_is_outlier'], false];
+
+/**
+ * Raw observations, styled by class and outlier flag.
+ *
+ * Subordinate to clusters by construction — smaller radius, lower opacity, and
+ * added beneath them — because a cluster is corroborated evidence and a lone
+ * observation is not. They must not compete for attention.
+ *
+ * Outliers are drawn HOLLOW rather than hidden. They are the rows the member
+ * gate silently drops, and 31.7% of pothole-classed observations still carry the
+ * flag even after the class-neutral feature set; an operator seeing a ring of
+ * hollow dots around a solid one is seeing a real property of the pipeline, not
+ * noise. Hiding them would make the gate unfalsifiable from the UI.
+ */
+export function observationsLayer(): CircleLayerSpecification {
+  const potholeColor = cssVar('--severity-4');
+  const crackColor = cssVar('--severity-2');
+  const otherColor = cssVar('--severity-unknown');
+  const classColor: ExpressionSpecification = [
+    'match',
+    ['coalesce', ['get', 'sensor_class'], 'not'],
+    'pothole',
+    potholeColor,
+    'crack',
+    crackColor,
+    otherColor,
+  ];
+  return {
+    id: LAYER_OBSERVATIONS,
+    type: 'circle',
+    source: SOURCE_OBSERVATIONS,
+    'source-layer': SOURCE_LAYER_OBSERVATIONS,
+    minzoom: OBSERVATIONS_MIN_ZOOM,
+    paint: {
+      // Hollow for outliers: transparent fill, the class colour moved to the ring.
+      'circle-color': ['case', IS_OUTLIER, 'rgba(0,0,0,0)', classColor],
+      'circle-radius': 3.5,
+      'circle-opacity': 0.85,
+      'circle-stroke-width': 1.2,
+      'circle-stroke-color': ['case', IS_OUTLIER, classColor, haloColor()],
+      'circle-stroke-opacity': 0.9,
+    },
+  };
+}
+
+// ── Camera frames ───────────────────────────────────────────────────────────
+//
+// The third source, and the visual counterpart to the observations layer. That
+// one answers "where did a wheel hit something?"; this answers "where did the
+// camera think it saw a defect?", which is a genuinely different set -- 98.6% of
+// pothole-classed observations have no coincident frame at all, and the frames
+// outnumber the observations.
+//
+// The tile carries `paired` and `fused_confidence` because the interesting
+// question about a camera detection is not its score but whether it reached
+// fusion. A frame that scored 0.9 and paired with nothing contributed nothing to
+// any cluster, and the score alone cannot say so.
+
+export const SOURCE_FRAMES = 'frames';
+export const SOURCE_LAYER_FRAMES = 'frames';
+export const LAYER_FRAMES = 'frames-points';
+
+/** Mirrors `tile_frames_min_zoom` in app/config.py; the endpoint 400s below it. */
+export const FRAMES_MIN_ZOOM = 15;
+/** Must exceed FRAMES_MIN_ZOOM — see OBSERVATIONS_MAX_ZOOM for why. */
+export const FRAMES_MAX_ZOOM = 16;
+
+/** The detector never ran on this frame: `detected_at IS NULL`. */
+const IS_UNSCORED: ExpressionSpecification = ['!', ['coalesce', ['get', 'detected'], false]];
+
+/** Reached fusion — i.e. actually contributed to a cluster's evidence. */
+const IS_PAIRED: ExpressionSpecification = ['coalesce', ['get', 'paired'], false];
+
+/**
+ * Camera frames, styled by detector confidence and fusion outcome.
+ *
+ * **Hollow means "did not contribute"** — the same grammar the observations
+ * layer uses for outlier-rejected readings. There it is the outlier gate; here it
+ * is an unpaired frame. An operator who learns the rule once reads both layers.
+ *
+ * Radius encodes `server_probability` so a confident detection is findable among
+ * thousands of near-zero ones; mean score on the collected data is 0.151, with
+ * only 352 of 5,615 above 0.5, so without this the layer is a uniform smear.
+ *
+ * Unscored frames are grey and small rather than hidden: the detection backlog is
+ * exactly the kind of thing this layer is well placed to surface.
+ */
+export function framesLayer(): CircleLayerSpecification {
+  const scored = cssVar('--color-accent-2');
+  const unscored = cssVar('--severity-unknown');
+  const probability: ExpressionSpecification = ['coalesce', ['get', 'server_probability'], 0];
+  return {
+    id: LAYER_FRAMES,
+    type: 'circle',
+    source: SOURCE_FRAMES,
+    'source-layer': SOURCE_LAYER_FRAMES,
+    minzoom: FRAMES_MIN_ZOOM,
+    paint: {
+      'circle-color': [
+        'case',
+        IS_UNSCORED, unscored,
+        ['!', IS_PAIRED], 'rgba(0,0,0,0)',
+        scored,
+      ],
+      'circle-radius': ['interpolate', ['linear'], probability, 0, 3, 0.5, 5, 1, 7.5],
+      'circle-opacity': 0.85,
+      'circle-stroke-width': 1.2,
+      'circle-stroke-color': ['case', IS_UNSCORED, unscored, scored],
+      'circle-stroke-opacity': 0.9,
     },
   };
 }

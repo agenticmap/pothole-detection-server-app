@@ -829,6 +829,106 @@ button:disabled {
   gap: 3px;
 }
 
+/* Raw-observation popup. An inspector for one sensor reading, opened from the
+ * observations layer. Deliberately plainer than the cluster detail panel: a
+ * reading is evidence, not a work item, and there is nothing to act on here. */
+.observation-popup .maplibregl-popup-content {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-3) var(--space-4);
+}
+
+.observation-popup .maplibregl-popup-tip {
+  border-top-color: var(--color-surface);
+  border-bottom-color: var(--color-surface);
+}
+
+.observation-popup-title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.observation-popup-flag {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+/* The rejected case is the one an operator needs to notice — it explains why a
+ * visible dot contributed nothing to any cluster. */
+.observation-popup-flag.is-outlier {
+  color: var(--severity-4);
+  font-weight: 600;
+}
+
+.observation-popup-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-3);
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.observation-popup-grid dt {
+  color: var(--color-text-subtle);
+}
+
+.observation-popup-grid dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The id is for correlating with a SQL query, so it must be selectable and
+ * unambiguous — hence monospace and a full, unelided value. */
+.observation-popup-id {
+  margin: var(--space-2) 0 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--color-text-subtle);
+  word-break: break-all;
+  user-select: all;
+}
+
+/* Raw-observations toggle.
+ *
+ * A checkbox rather than another chip row: the chips are all filters over the
+ * one cluster source, and this switches a different source on and off. Making
+ * it look like a chip would imply it narrows the same set. */
+.dock-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.dock-toggle-input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--severity-4);
+  cursor: pointer;
+  flex: none;
+}
+
+/* The zoom floor is a fact about the server, not a nag, so it stays visible
+ * rather than appearing only on failure. */
+.dock-group-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--color-text-subtle);
+}
+
 /* Disabled because the schema has no street column; still shown, per the design. */
 .dock-group .input:disabled {
   background: var(--color-surface-sunken);

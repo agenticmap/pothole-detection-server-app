@@ -31,6 +31,14 @@ import { SEVERITY_TIERS, UNRATED_LABEL } from './severity.ts';
 import type { ClusterStats } from './stats.ts';
 
 /** Corroboration steps, matching the mockup. Single-select, like a radio group. */
+/**
+ * Zoom floor shown in the raw-observations hint. Mirrors OBSERVATIONS_MIN_ZOOM
+ * in map/layers.ts, which in turn mirrors `tile_observations_min_zoom` in
+ * app/config.py. Duplicated as a literal rather than imported so the dock does
+ * not pull in the map module for one number.
+ */
+const OBSERVATIONS_HINT_ZOOM = 15;
+
 const DEVICE_STEPS = [
   { value: 1, label: 'Any' },
   { value: 2, label: '2+ devices' },
@@ -58,6 +66,11 @@ export interface DockFilter {
 
 export interface DockCallbacks {
   onFilterChange: (filter: DockFilter) => void;
+  /** Raw-observation layer toggled. Separate from onFilterChange because it is a
+   * layer visibility change, not a filter over the cluster source. */
+  onObservationsToggle: (visible: boolean) => void;
+  /** Camera-frame layer toggled. */
+  onFramesToggle: (visible: boolean) => void;
 }
 
 /**
@@ -79,6 +92,9 @@ export class Dock {
   private readonly sourceGroup: HTMLElement;
   private readonly deviceRow: HTMLElement;
   private readonly readout: HTMLElement;
+  private observationsToggle!: HTMLInputElement;
+  private framesToggle!: HTMLInputElement;
+  private observationsHint!: HTMLElement;
   private readonly note: HTMLElement;
 
   private readonly filter: DockFilter = {
@@ -135,6 +151,51 @@ export class Dock {
       this.sourceRow,
     ]);
 
+    // Raw observations. Off by default -- see PotholeMap.observationsVisible.
+    // The hint carries the zoom floor because the layer is server-gated at z15
+    // and an operator toggling it on at z13 would otherwise see nothing happen
+    // and reasonably conclude it was broken.
+    this.observationsToggle = el('input', {
+      type: 'checkbox',
+      id: 'toggle-observations',
+      class: 'dock-toggle-input',
+    }) as HTMLInputElement;
+    this.observationsToggle.addEventListener('change', () => {
+      this.callbacks.onObservationsToggle(this.observationsToggle.checked);
+    });
+    this.observationsHint = el('p', {
+      class: 'dock-group-hint',
+      text:
+        'Individual readings before clustering: sensor observations the outlier gate ' +
+        'rejected, and camera frames that never paired. Both are hollow when they ' +
+        `reached no cluster. Zoom ${OBSERVATIONS_HINT_ZOOM}+ to see them.`,
+    });
+    // Camera frames. A separate toggle rather than one "show raw data" switch,
+    // because the two answer different questions -- where a wheel hit something
+    // versus where the camera thought it saw something -- and 10,000 points from
+    // both at once is unreadable.
+    this.framesToggle = el('input', {
+      type: 'checkbox',
+      id: 'toggle-frames',
+      class: 'dock-toggle-input',
+    }) as HTMLInputElement;
+    this.framesToggle.addEventListener('change', () => {
+      this.callbacks.onFramesToggle(this.framesToggle.checked);
+    });
+
+    const observationsGroup = el('div', { class: 'dock-group' }, [
+      el('h3', { class: 'dock-group-title', text: 'Raw detections' }),
+      el('label', { class: 'dock-toggle' }, [
+        this.observationsToggle,
+        el('span', { text: 'Sensor observations' }),
+      ]),
+      el('label', { class: 'dock-toggle' }, [
+        this.framesToggle,
+        el('span', { text: 'Camera frames' }),
+      ]),
+      this.observationsHint,
+    ]);
+
     const card = el('div', { class: 'dock-card' }, [
       el('div', { class: 'dock-card-header' }, [
         el('div', { class: 'dock-heading-block' }, [
@@ -158,6 +219,7 @@ export class Dock {
         el('h3', { class: 'dock-group-title', text: 'Corroboration' }),
         this.deviceRow,
       ]),
+      observationsGroup,
     ]);
 
     this.scroll = el('div', { class: 'dock-scroll' }, [this.note, card]);
@@ -242,7 +304,10 @@ export class Dock {
     span.textContent = [
       properties['repaired'] ? 'repaired' : 'open',
       severity === null ? 'unrated' : `severity ${formatNumber(severity, 2)}`,
-      `${properties['distinct_devices'] ?? 0} devices`,
+      // Passes, not just devices: one car over the same defect on three days is
+      // three surveys in the source paper and one device here. Showing devices
+      // alone made every real cluster read as uncorroborated.
+      `${properties['distinct_devices'] ?? 0} dev · ${properties['distinct_passes'] ?? 0} pass`,
       `${properties['observation_count'] ?? 0} observations`,
     ].join(' · ');
   }

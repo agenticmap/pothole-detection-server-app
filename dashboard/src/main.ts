@@ -174,6 +174,8 @@ function renderApp(): void {
         });
         setOpenCount(dock!.shownCount(), lastOpenTotal);
       },
+      onObservationsToggle: (visible) => map?.setObservationsVisible(visible),
+      onFramesToggle: (visible) => map?.setFramesVisible(visible),
     },
   );
 

@@ -142,6 +142,7 @@ export class DetailPanel {
     body.append(
       el('section', { class: 'panel-section' }, [
         field('Corroborating devices', plural(detail.distinct_devices, 'device')),
+        field('Corroborating passes', plural(detail.distinct_passes ?? 0, 'pass', 'passes')),
         field('Observations', String(detail.observation_count)),
         field('Confidence', formatNumber(detail.confidence, 2)),
         field('Last seen', formatDateTime(detail.last_seen)),

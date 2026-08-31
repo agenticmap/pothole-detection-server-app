@@ -5,6 +5,7 @@
 import {
   Map as MapLibreMap,
   NavigationControl,
+  Popup,
   ScaleControl,
   type ErrorEvent,
   type MapGeoJSONFeature,
@@ -16,15 +17,26 @@ import './worker.ts';
 import { basemapStyle } from './basemap.ts';
 import {
   BASE_INDIVIDUAL_FILTER,
+  FRAMES_MAX_ZOOM,
+  FRAMES_MIN_ZOOM,
   LAYER_AGGREGATE,
+  LAYER_FRAMES,
   LAYER_INDIVIDUAL,
+  LAYER_OBSERVATIONS,
+  OBSERVATIONS_MAX_ZOOM,
+  OBSERVATIONS_MIN_ZOOM,
+  SOURCE_FRAMES,
   SOURCE_ID,
   SOURCE_LAYER,
+  SOURCE_OBSERVATIONS,
   aggregateLayer,
+  framesLayer,
   individualLayer,
+  observationsLayer,
 } from './layers.ts';
 import { installTileAuthRecovery, refreshTokenCache, transformRequest } from './tile-auth.ts';
-import { SEVERITY_TIERS, UNRATED_LABEL } from '../severity.ts';
+import { SEVERITY_TIERS, UNRATED_LABEL, severityLabel } from '../severity.ts';
+import { el } from '../dom.ts';
 import type { ExpressionSpecification, FilterSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { currentTheme, type Theme } from '../theme.ts';
 
@@ -73,6 +85,22 @@ export class PotholeMap {
   /** Kept so the selection can be re-applied after setTiles or setStyle, both
    * of which discard feature state. */
   private selectedId: string | null = null;
+  /**
+   * Whether the raw-observation layer is drawn. Off by default: a cluster is the
+   * unit of work an operator acts on, and 4,637 raw points would bury 25 of them.
+   * The dock toggles it on when someone wants to see what was reported rather
+   * than what corroborated.
+   */
+  private observationsVisible = false;
+  /** Same reasoning as observationsVisible: 5,615 frames would bury 24 clusters. */
+  private framesVisible = false;
+  /** Reused rather than constructed per click, so only one can ever be open. */
+  private readonly observationPopup = new Popup({
+    closeButton: true,
+    closeOnClick: true,
+    maxWidth: '320px',
+    className: 'observation-popup',
+  });
 
   constructor(private readonly options: PotholeMapOptions) {
     this.assetType = options.assetType;
@@ -121,6 +149,42 @@ export class PotholeMap {
       });
     });
 
+    // Raw observations open a read-only popup rather than the detail panel: an
+    // observation is a sensor reading, not a work item, and there is no
+    // /observations/{id} endpoint behind it. Everything it shows is already in
+    // the tile, so the popup costs no request.
+    this.map.on('click', LAYER_OBSERVATIONS, (e: MapLayerMouseEvent) => {
+      const feature = e.features?.[0];
+      if (!feature) return;
+      this.observationPopup
+        .setLngLat(e.lngLat)
+        .setDOMContent(observationPopupContent(feature.properties ?? {}))
+        .addTo(this.map);
+    });
+
+    this.map.on('mouseenter', LAYER_OBSERVATIONS, () => {
+      this.map.getCanvas().style.cursor = 'pointer';
+    });
+    this.map.on('mouseleave', LAYER_OBSERVATIONS, () => {
+      this.map.getCanvas().style.cursor = '';
+    });
+
+    this.map.on('click', LAYER_FRAMES, (e: MapLayerMouseEvent) => {
+      const feature = e.features?.[0];
+      if (!feature) return;
+      this.observationPopup
+        .setLngLat(e.lngLat)
+        .setDOMContent(framePopupContent(feature.properties ?? {}))
+        .addTo(this.map);
+    });
+
+    this.map.on('mouseenter', LAYER_FRAMES, () => {
+      this.map.getCanvas().style.cursor = 'pointer';
+    });
+    this.map.on('mouseleave', LAYER_FRAMES, () => {
+      this.map.getCanvas().style.cursor = '';
+    });
+
     for (const layer of [LAYER_INDIVIDUAL, LAYER_AGGREGATE]) {
       this.map.on('mouseenter', layer, () => {
         this.map.getCanvas().style.cursor = 'pointer';
@@ -156,6 +220,25 @@ export class PotholeMap {
     ];
   }
 
+  private observationTiles(): string[] {
+    return [
+      buildTileUrl('/api/v1/tiles/observations/{z}/{x}/{y}.mvt', {
+        asset_type: this.assetType,
+        v: String(this.tileVersion),
+      }),
+    ];
+  }
+
+  private frameTiles(): string[] {
+    return [
+      buildTileUrl('/api/v1/tiles/frames/{z}/{x}/{y}.mvt', {
+        // No asset_type: asset_frame has no such column. A frame is a photograph
+        // of the road, not an assertion about one asset class.
+        v: String(this.tileVersion),
+      }),
+    ];
+  }
+
   private addClusterLayers(): void {
     this.map.addSource(SOURCE_ID, {
       type: 'vector',
@@ -166,8 +249,40 @@ export class PotholeMap {
       // is what makes setFeatureState work for the optimistic repair update.
       promoteId: { [SOURCE_LAYER]: 'cluster_id' },
     });
+    // The raw-observation source. `minzoom` here is not cosmetic: the endpoint
+    // 400s below OBSERVATIONS_MIN_ZOOM, and MapLibre never retries an errored
+    // tile, so without it panning at z14 would permanently poison tiles that
+    // would otherwise have loaded on the way back up.
+    this.map.addSource(SOURCE_OBSERVATIONS, {
+      type: 'vector',
+      tiles: this.observationTiles(),
+      minzoom: OBSERVATIONS_MIN_ZOOM,
+      maxzoom: OBSERVATIONS_MAX_ZOOM,
+    });
+    this.map.addSource(SOURCE_FRAMES, {
+      type: 'vector',
+      tiles: this.frameTiles(),
+      minzoom: FRAMES_MIN_ZOOM,
+      maxzoom: FRAMES_MAX_ZOOM,
+    });
+    // Observations first, so clusters paint over them. Corroborated evidence
+    // should never be occluded by a single unconfirmed reading.
+    // Frames beneath observations: a camera guess is the weakest evidence on the
+    // map, and there are more of them than anything else.
+    this.map.addLayer(framesLayer());
+    this.map.addLayer(observationsLayer());
     this.map.addLayer(aggregateLayer());
     this.map.addLayer(individualLayer());
+    this.map.setLayoutProperty(
+      LAYER_OBSERVATIONS,
+      'visibility',
+      this.observationsVisible ? 'visible' : 'none',
+    );
+    this.map.setLayoutProperty(
+      LAYER_FRAMES,
+      'visibility',
+      this.framesVisible ? 'visible' : 'none',
+    );
     // Feature state does not survive a source rebuild, so restore it here —
     // this runs on first load, after setStyle, and after an asset-type change.
     this.applySelected(this.selectedId, true);
@@ -315,6 +430,40 @@ export class PotholeMap {
     if (source && 'setTiles' in source) {
       (source as VectorTileSource).setTiles(this.tiles());
     }
+    // The observation source needs the same treatment: it is fetched with the
+    // same bearer, so a 401 recovery that refreshed only the cluster tiles would
+    // leave the observation layer permanently blank.
+    const observations = this.map.getSource(SOURCE_OBSERVATIONS);
+    if (observations && 'setTiles' in observations) {
+      (observations as VectorTileSource).setTiles(this.observationTiles());
+    }
+    const frames = this.map.getSource(SOURCE_FRAMES);
+    if (frames && 'setTiles' in frames) {
+      (frames as VectorTileSource).setTiles(this.frameTiles());
+    }
+  }
+
+  /** Show or hide the camera-frame layer. Driven by the dock toggle. */
+  setFramesVisible(visible: boolean): void {
+    this.framesVisible = visible;
+    if (!this.map.getLayer(LAYER_FRAMES)) return;
+    this.map.setLayoutProperty(LAYER_FRAMES, 'visibility', visible ? 'visible' : 'none');
+  }
+
+  /** Show or hide the raw-observation layer. Driven by the dock toggle. */
+  setObservationsVisible(visible: boolean): void {
+    this.observationsVisible = visible;
+    if (!this.map.getLayer(LAYER_OBSERVATIONS)) return;
+    this.map.setLayoutProperty(
+      LAYER_OBSERVATIONS,
+      'visibility',
+      visible ? 'visible' : 'none',
+    );
+  }
+
+  /** Minimum zoom at which the observation layer has anything to show. */
+  observationsMinZoom(): number {
+    return OBSERVATIONS_MIN_ZOOM;
   }
 
   /**
@@ -362,6 +511,161 @@ export class PotholeMap {
 function buildTileUrl(path: string, params: Record<string, string>): string {
   const query = new URLSearchParams(params).toString();
   return `${location.origin}${path}?${query}`;
+}
+
+/**
+ * Everything the observations tile carries about one reading, as a definition
+ * list.
+ *
+ * Built with textContent throughout — `client_id` and `sensor_class` are values
+ * the database holds, and this file has no business deciding they are safe to
+ * parse as HTML.
+ *
+ * Unknown keys are rendered rather than dropped, so a column added to
+ * _OBSERVATION_TILE_SQL shows up here without a frontend change. That is the
+ * point of the popup: it is an inspector for the pipeline, not a curated card.
+ */
+function observationPopupContent(props: Record<string, unknown>): HTMLElement {
+  const rows: Array<[string, string]> = [];
+
+  const num = (v: unknown, digits: number): string | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : null;
+
+  const outlier = props['sensor_is_outlier'] === true;
+
+  rows.push(['Class', String(props['sensor_class'] ?? 'unscored')]);
+
+  const p = num(props['sensor_p_pothole'], 3);
+  if (p !== null) rows.push(['P(pothole)', p]);
+
+  const severity = num(props['sensor_severity'], 3);
+  if (severity !== null) {
+    const label = severityLabel(props['sensor_severity'] as number);
+    rows.push(['Severity', `${severity} · ${label}`]);
+  }
+
+  const speed = props['speed_mps'];
+  if (typeof speed === 'number') {
+    rows.push(['Speed', `${speed.toFixed(1)} m/s · ${(speed * 3.6).toFixed(0)} km/h`]);
+  }
+
+  const accuracy = num(props['accuracy_m'], 1);
+  if (accuracy !== null) rows.push(['GPS accuracy', `${accuracy} m`]);
+
+  const ts = props['ts_epoch'];
+  if (typeof ts === 'number') {
+    rows.push(['Recorded', new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z']);
+  }
+
+  // Anything the tile gained that this function does not know about.
+  const known = new Set([
+    'client_id', 'sensor_class', 'sensor_p_pothole', 'sensor_severity',
+    'sensor_is_outlier', 'speed_mps', 'accuracy_m', 'ts_epoch',
+  ]);
+  for (const [key, value] of Object.entries(props)) {
+    if (!known.has(key)) rows.push([key, String(value)]);
+  }
+
+  const dl = el('dl', { class: 'observation-popup-grid' });
+  for (const [term, value] of rows) {
+    dl.append(el('dt', { text: term }), el('dd', { text: value }));
+  }
+
+  return el('div', {}, [
+    el('h3', { class: 'observation-popup-title', text: 'Raw observation' }),
+    // The outlier flag is the reason this layer is inspectable at all: it is
+    // what the cluster member gate silently drops. Stated as a sentence rather
+    // than a true/false row, because "sensor_is_outlier: true" does not tell an
+    // operator that the reading was excluded from clustering.
+    el('p', {
+      class: outlier ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
+      text: outlier
+        ? 'Rejected by the outlier gate — excluded from clustering.'
+        : 'Passed the outlier gate.',
+    }),
+    dl,
+    el('p', {
+      class: 'observation-popup-id',
+      text: String(props['client_id'] ?? 'unknown id'),
+    }),
+  ]);
+}
+
+/**
+ * One camera frame: what the detector scored it, and whether that reached fusion.
+ *
+ * The fusion outcome leads, for the same reason the outlier flag leads on an
+ * observation. A frame scoring 0.9 that paired with nothing contributed nothing
+ * to any cluster, and no arrangement of the score alone says so.
+ */
+function framePopupContent(props: Record<string, unknown>): HTMLElement {
+  const rows: Array<[string, string]> = [];
+
+  const num = (v: unknown, digits: number): string | null =>
+    typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : null;
+
+  const detected = props['detected'] === true;
+  const paired = props['paired'] === true;
+
+  const serverP = num(props['server_probability'], 3);
+  rows.push(['Server p', serverP ?? 'not scored']);
+
+  const deviceP = num(props['device_probability'], 3);
+  if (deviceP !== null) rows.push(['On-device p', deviceP]);
+
+  const model = props['server_model_id'];
+  if (typeof model === 'string' && model) rows.push(['Model', model]);
+
+  const boxes = props['server_box_count'];
+  if (typeof boxes === 'number') rows.push(['Boxes found', String(boxes)]);
+
+  const fused = num(props['fused_confidence'], 3);
+  if (fused !== null) {
+    rows.push(['Fused confidence', props['is_primary'] === true ? `${fused} (primary)` : fused]);
+  }
+
+  const ts = props['ts_epoch'];
+  if (typeof ts === 'number') {
+    rows.push(['Captured', new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z']);
+  }
+
+  const known = new Set([
+    'client_id', 'device_probability', 'server_probability', 'server_model_id',
+    'server_box_count', 'detected', 'paired', 'is_primary', 'fused_confidence', 'ts_epoch',
+  ]);
+  for (const [key, value] of Object.entries(props)) {
+    if (!known.has(key)) rows.push([key, String(value)]);
+  }
+
+  let status: string;
+  let severe = false;
+  if (!detected) {
+    status = 'Not yet scored — the detection worker has not reached this frame.';
+    severe = true;
+  } else if (!paired) {
+    status = 'Scored but unpaired — no sensor event matched, so it reached no cluster.';
+    severe = true;
+  } else {
+    status = 'Paired with a sensor event and fused.';
+  }
+
+  const dl = el('dl', { class: 'observation-popup-grid' });
+  for (const [term, value] of rows) {
+    dl.append(el('dt', { text: term }), el('dd', { text: value }));
+  }
+
+  return el('div', {}, [
+    el('h3', { class: 'observation-popup-title', text: 'Camera frame' }),
+    el('p', {
+      class: severe ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
+      text: status,
+    }),
+    dl,
+    el('p', {
+      class: 'observation-popup-id',
+      text: String(props['client_id'] ?? 'unknown id'),
+    }),
+  ]);
 }
 
 export { AGGREGATE_MAX_ZOOM, MIN_DETAIL_ZOOM, refreshTokenCache };

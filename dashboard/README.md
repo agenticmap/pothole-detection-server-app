@@ -68,8 +68,23 @@ put a secret here):
 | `VITE_MAP_LAT` / `VITE_MAP_LON` | Toronto | Initial map centre |
 | `VITE_MAP_ZOOM` | `14` | Initial zoom — keep it **above 12** or the first thing an operator sees is aggregate bubbles, which are not clickable |
 | `VITE_API_TARGET` | `http://127.0.0.1:8000` | Dev-server proxy target only |
+| `VITE_BASEMAP_URL` | `/basemap/toronto.pmtiles` | PMTiles archive path, for a non-Toronto region |
+| `VITE_PROVENANCE_NOTE` | _(empty)_ | Free text shown above the dock — e.g. "synthetic demo data" |
 
-There is no extent endpoint, so the starting view is configured rather than discovered.
+Copy [`.env.example`](./.env.example) to `dashboard/.env`. **Vite reads `.env` from this
+directory, not the repo root**, so `VITE_*` keys placed in the server's `../.env` are silently
+ignored. `dashboard/.env` is gitignored (the root `.gitignore`'s bare `.env` matches at any
+depth), which is why the example is tracked.
+
+There is no extent endpoint, so the starting view is configured rather than discovered — and
+getting it wrong looks like an empty database. **Aim at the densest cluster cell, not the
+observation centroid**: a drive is a long corridor, so its centroid usually falls in a gap between
+clusters and its tile is empty.
+
+```sql
+SELECT ST_SnapToGrid(centroid::geometry, 0.01), count(*)
+FROM asset_cluster GROUP BY 1 ORDER BY 2 DESC LIMIT 1;
+```
 
 ## Layout
 
@@ -130,10 +145,38 @@ Each of these cost real time to find. They are in the code as comments too.
   zero, or a first-time visitor lands at (0, 0).
 - **Never use `innerHTML`.** The repair note is operator free text the API echoes back.
 
+## Raw detections
+
+Two toggles under **Raw detections**, both off by default and both **only visible at z ≥ 15** — the
+endpoints return 400 below that, so each source carries a matching `minzoom`.
+
+| Toggle | Source | Answers |
+|---|---|---|
+| Sensor observations | `GET /api/v1/tiles/observations` | Where did a wheel hit something? |
+| Camera frames | `GET /api/v1/tiles/frames` | Where did the camera think it saw a defect? |
+
+They are genuinely different sets: 98.6% of pothole-classed observations have no coincident frame,
+and there are more frames (5,615) than observations (4,637).
+
+**One visual rule spans both: hollow means it did not contribute.** On the sensor layer that is a
+reading the outlier gate rejected; on the camera layer it is a frame that paired with nothing and so
+reached no cluster. Learn it once and both layers read. Grey camera frames are ones the detector has
+not scored yet. Camera radius encodes `server_probability`, because the mean is 0.151 and only 352
+of 5,615 exceed 0.5 — flat radii would render as a uniform smear.
+
+They exist because a cluster needs three admitted detections within 25 m, and plenty never get
+there: only 110 of 166 admitted observations reach one, and 1,183 of 5,615 frames pair with nothing.
+Hiding that would make the pipeline's own gates unfalsifiable from the UI. Click any point for its
+full record.
+
 ## Not built
 
 The inventory list, work orders, reports, and any automated frontend tests. The module rail has
 disabled slots for the first three so adding them is additive.
+
+`npm run build` runs `tsc --noEmit` first, so the strict type-check is the only automated gate the
+frontend has. The server suite (`pytest`, 453 tests) covers the endpoints behind it but nothing in
+`dashboard/src`.
 
 Filters and dark mode **were** built in Phase 2.5b; the basemap is no longer raster OSM. See
 [`docs/phases/phase-2.5b-dashboard-design.md`](../docs/phases/phase-2.5b-dashboard-design.md) for the as-built

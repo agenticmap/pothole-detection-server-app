@@ -149,11 +149,18 @@ body {
 /* Legend moves to the bottom RIGHT — the dock owns the left edge.
  * Below 700px of map pane the .legend-strip below replaces it (see
  * INTEGRATION.md; the swap is a width check in JS, not a media query, because
- * the pane width depends on whether the detail panel is open). */
+ * the pane width depends on whether the detail panel is open).
+ *
+ * It has to sit ABOVE MapLibre's bottom-right control stack, which shares this
+ * corner. At `bottom: var(--space-3)` it covered the zoom buttons entirely — a
+ * click on zoom-in hit the legend instead — and the attribution strip with them,
+ * which the basemap licence requires to stay visible. `--map-ctrl-bottom-h` is
+ * measured and published by installLegendResponsiveness() in shell.ts; the
+ * fallback covers the first frame, before MapLibre has added the controls. */
 .legend {
   left: auto;
   right: var(--space-3);
-  bottom: var(--space-3);
+  bottom: calc(var(--space-3) + var(--map-ctrl-bottom-h, 116px));
   min-width: 172px;
   padding: var(--space-3) var(--space-4);
   background: var(--color-canvas);
