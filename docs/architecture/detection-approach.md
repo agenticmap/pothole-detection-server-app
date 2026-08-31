@@ -83,7 +83,7 @@ The hybrid drops into the existing pluggable detection seam with **zero schema c
    `VLM_BLEND_WEIGHT` against real frames once data exists. The `model_disagreement` table
    (device vs server probability) is the natural place to mine tuning examples.
 
-See [`.env.example`](../.env.example) for every knob.
+See [`.env.example`](../../.env.example) for every knob.
 
 ## Deferred (Phase C)
 

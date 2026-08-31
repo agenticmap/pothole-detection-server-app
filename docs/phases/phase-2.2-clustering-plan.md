@@ -91,6 +91,20 @@ fused-pair-only membership.
 - `cluster_eps_m` / `cluster_min_points` — tune on pilot data (25 m / 3 from roadmap).
   The Mercator eps correction uses the dataset mean latitude; for very wide-area data a
   per-point/UTM projection would be more exact.
+
+  > **Measured 2026-08-30, and the answer is uncomfortable.** These two do not express what they
+  > appear to. `cluster_eps_m = 25` is **1.9 seconds of travel** at the measured median 13 m/s, so
+  > "3 points within 25 m" is one drive-past of one rough patch, not three sightings. On the
+  > collected data every cluster spans a median of **2.0 s** and none spans more than a day — the
+  > pipeline has produced **zero** genuinely corroborated defects, and `CLUSTER_MIN_DISTINCT_DEVICES`
+  > is the only reason that has not reached the public read path.
+  >
+  > Tightening `cluster_eps_m` does not fix it (a tighter radius is still one pass); raising
+  > `cluster_min_points` mostly just discards data. The change this points at is corroboration by
+  > distinct **passes** — `(device_id, time bucket)` — rather than raw point count, which would let a
+  > single-vehicle survey confirm a defect seen on three different days. Not implemented; it changes
+  > `_MEMBERS_CTE`/`_CLUSTER_SQL` and deserves its own measurement. See
+  > [`integration-round-2026-08.md`](./integration-round-2026-08.md) §4.
 - ~~`confidence` aggregate is the member mean — revisit vs. max.~~ **Done in Phase 2.2c**
   ([`phase-2.2c-spatiotemporal-fusion.md`](./phase-2.2c-spatiotemporal-fusion.md)): it is now
   a spatiotemporally weighted combination of the members' class distributions, so a recent

@@ -98,9 +98,18 @@ clamps outbound values as a belt-and-braces guard.
 have detected it (enforced in `cluster_query_service.py`). A single phone driving solo will
 detect real potholes, but they stay private and `GET /api/v1/potholes` returns **empty**.
 
-- **Fix:** drive with 2+ devices, or set `CLUSTER_MIN_DISTINCT_DEVICES=1` for a solo test (now
-  set in the local `.env`). Clustering also needs **≥ 3 points within 25 m**
-  (`cluster_min_points=3`, `cluster_eps_m=25`), so **make at least 3 passes** over the same spot.
+- **Fix:** drive with 2+ devices, or set `CLUSTER_MIN_DISTINCT_DEVICES=1` for a solo test.
+  Clustering also needs **≥ 3 points within 25 m** (`cluster_min_points=3`, `cluster_eps_m=25`),
+  so **make at least 3 passes** over the same spot.
+
+  > **Qualified 2026-08-30.** "≥ 3 points within 25 m" does not mean three passes. At the measured
+  > median 13 m/s, **25 m is 1.9 seconds of travel**, so one drive-past of one rough patch satisfies
+  > it on its own — and it did: every cluster on the collected data spans a median of **2.0 s**.
+  > `cluster_min_points` has therefore never required corroboration, and
+  > `CLUSTER_MIN_DISTINCT_DEVICES` is the only thing that has. Setting it to 1 does not reveal
+  > confirmed defects the gate was hiding; it publishes single-pass artefacts. Measure first with
+  > `python scripts/device_gate_eval.py`, and prefer the per-request `min_devices=1` query parameter
+  > for a demo. See [`integration-round-2026-08.md`](../phases/integration-round-2026-08.md) §4.
 - The shipped default stays **2**; `tests/test_potholes.py` now pins the threshold explicitly in
   both directions so the filter logic is tested regardless of local configuration.
 
@@ -246,8 +255,9 @@ Relevant to a drive:
 
 ## Known gaps (not blocking a drive)
 
-- **The in-memory rate limiter is per-worker.** The Dockerfile runs `--workers 2`, so the
-  effective limit doubles and is applied inconsistently. Fine for one device; wrong for a fleet.
+- ~~**The in-memory rate limiter is per-worker.**~~ **Fixed 2026-08-31.** Counts live in
+  `device_rate_limit`, so all workers share one ceiling. Still per-device only — there is no
+  per-IP limit and no limit at all on the public read path.
 - ~~**`run_fit_job` has no advisory lock**~~ **Fixed** — it now takes `0x504F57`, alongside
   fusion `0x504F54`, cluster `0x504F55` and detection `0x504F56`. Migrations take `0x504F53`.
 - **No frame retention/GC.** Roadmap §2.8 describes a 90-day GC and a 500 MB/device budget;

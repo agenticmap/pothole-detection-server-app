@@ -1,3 +1,7 @@
+---
+updated: 2026-08-30
+---
+
 # Phase 2.1 — Sensor Classification + Fusion Engine v1 (As-Built)
 
 > Status: **Implemented.** Companion to [`docs/roadmap.md`](../roadmap.md) §2.4 and
@@ -118,8 +122,17 @@ mutate the cached `settings` object.
    between "no gate at all" and "no potholes at all". The cause is that `OUTLIER_FEATURES` includes
    `ratio`, `gbar` and `magnitude`, on which potholes separate from everything else by 14-15x. A
    class-neutral set — `(accel_std, speed_mps)`, which carry no class signal — keeps 122 of 140 at
-   the unchanged 0.1 and flags roughly uniformly across classes. Not applied: it needs a re-fit and a
-   re-score, and it changes what every existing `sensor_is_outlier` means.
+   the unchanged 0.1 and flags roughly uniformly across classes.
+
+   > **✅ Applied 2026-08-30.** This paragraph read "Not applied" for long enough that the gate went
+   > on to flag **285 of 286** pothole-classed observations on the collected data, leaving the crowd
+   > pipeline's sensor arm admitting exactly **one** row. The feature set is now
+   > `SENSOR_OUTLIER_FEATURES` (default `accel_std,speed_mps`), recorded per-model by
+   > `migrations/014` so an old model is still scored with the set it was fitted on, and a change to
+   > it forces a refit rather than waiting for 200 new observations. Admitted observations went
+   > 1 → 166 and clusters 4 → 25. It is **better, not neutral** — 31.7% of potholes are still
+   > flagged against 8–9% of other classes. See
+   > [`integration-round-2026-08.md`](./integration-round-2026-08.md) §1.
 3. Whether `crack` folds into `pothole` for `sensor_confidence` downstream.
 4. Severity: revisit the fuller double-integration IRI from the raw `[180,10]` window once validated.
 5. `model_blob`: inline `bytea` (current) vs. object-storage ref at scale.

@@ -166,7 +166,12 @@ threshold. Still sensor-model work, not this phase's.
   `BayesianGaussianMixture(weight_concentration_prior_type='dirichlet_process')` if it is ever
   wanted, but note it truncates at `n_components` and under-estimates posterior variance, so its
   class count can differ from the paper's Gibbs run.
-- **The 2σ accuracy buffer** for assignment (C3), pending the bearing-accuracy wire field.
+- ~~**The 2σ accuracy buffer** for assignment (C3)~~ **Done 2026-08-31** for the *location*
+  half — `min(2 × accuracy_m, CLUSTER_EPS_M)`, with DBSCAN replaced by the paper's
+  prior-sweep centroid matching. C3 deferred both halves citing the missing *bearing*
+  accuracy field; that reason only ever applied to the bearing gate, which remains
+  blocked on the wire field. Widest cluster 124 m → 19.9 m. See
+  [`paper-fidelity-assessment.md`](../research/paper-fidelity-assessment.md) §3.3.
 - **Per-device reliability weighting.** The paper motivates it — different vehicles and sensors
   respond differently — but does not implement it either. It needs Phase 3's labelled data.
 - **Road-segment partitioning.** The paper classifies per segment, derived from bearing-change

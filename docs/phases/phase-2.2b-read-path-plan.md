@@ -84,6 +84,40 @@ both zoom paths at the HTTP layer plus the repaired/single-device exclusions. Ma
 `curl -H "Accept-Version: v1" ".../api/v1/potholes?bbox=-79.5,43.6,-79.3,43.7&zoom=16"`
 (individual) vs `&zoom=12` (aggregated).
 
+## Amendment 2026-08-30/31 — `min_devices` and `min_passes` are per-request overrides
+
+`query_potholes` read `settings.cluster_min_distinct_devices` directly, so the corroboration
+floor was fixed for every caller. Both routes now accept an optional `min_devices` query
+parameter; omitting it uses the configured value, so the **frozen v1 contract is unchanged** and
+the Android client — which sends no such parameter — behaves identically. A test pins that.
+
+Why it was needed: this filter is applied *only* here and on `/potholes/detail`. The tile
+endpoints take their own `TileFilter.min_devices` (default 0) and `/clusters/stats` applies no
+device filter at all, so the operator dashboard and the mobile app read the same table and
+legitimately disagree. With the value hardcoded there was no way to measure the trade;
+`scripts/device_gate_eval.py` now sweeps it.
+
+What the sweep found is recorded in
+[`integration-round-2026-08.md`](./integration-round-2026-08.md) §4 and is worth knowing before
+touching the default: every cluster on the collected data spans a median of **2.0 seconds** — one
+car, one pass — because `CLUSTER_EPS_M` (25 m) is 1.9 s of travel at the median speed. So
+`CLUSTER_MIN_POINTS` has never required corroboration, and this floor is the only thing that
+does. Lowering it does not reveal hidden confirmed defects; it publishes single-pass artefacts.
+
+### `min_passes`, added 2026-08-31
+
+The device floor measures the wrong thing for this paper: its unit of evidence is the *survey*,
+and its own validation was one phone on five days. The filter is now:
+
+```sql
+AND (distinct_devices >= $1 OR distinct_passes >= $8)
+```
+
+Two independent floors, either sufficient. `min_passes` mirrors `min_devices` — optional query
+parameter, defaulting to `CLUSTER_MIN_DISTINCT_PASSES` — so a client that sends neither behaves
+exactly as before. A test pins that the public tier still returns only `{type, id, lat, lon}`,
+because `distinct_passes` and `member_span_s` were added to the *staff* model only.
+
 ## Out of scope / fast-follow
 - App-side `since`/`next_since` incremental fetch (server returns it; app omits `since` in v1).
 - Auth / rate-limiting on the public read path (roadmap §2.8).

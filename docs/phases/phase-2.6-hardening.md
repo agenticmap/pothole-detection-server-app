@@ -282,10 +282,12 @@ the 21 unpushed commits and added to `.gitignore`; `files/MatlabCode/*.m` (29 KB
 
 From `roadmap.md` §2.8–2.9 and `road-test-readiness.md` "Known gaps":
 
-- **Shared rate limiter.** `app/middleware/rate_limit.py` uses module-level `defaultdict`s, so
-  `--workers 2` doubles the effective ceiling and applies it inconsistently.
-  `migrations/001_initial_schema.sql` already contains an unused `device_rate_limit` table for
-  exactly this.
+- ~~**Shared rate limiter.**~~ **Done 2026-08-31.** `app/middleware/rate_limit.py` now counts in
+  `device_rate_limit` (unused since migration 001; `migrations/016` adds the prune index).
+  Verified live against `--workers 2`: five requests produced one shared counter of five, where
+  the old module-level `defaultdict`s would have kept two private ceilings. It **fails open** and
+  logs at ERROR if the quota query breaks — a device that cannot upload loses collected drive data
+  permanently, whereas overshooting a quota costs a few rows of disk.
 - **Per-IP limits** (roadmap §2.8) and **any limiting at all on the public read path** — the
   latter explicitly out of scope in `phase-2.2b-read-path-plan.md`.
 - **Frame retention/GC + 500 MB/device storage budget.** `storage/` grows without bound.

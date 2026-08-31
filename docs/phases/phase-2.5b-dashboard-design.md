@@ -77,6 +77,13 @@ of the observed distribution, and should be recalibrated against real drive data
 The endpoint takes them as a **parameter** so `severity.ts` stays the single source of truth (see
 §5).
 
+> **Follow-up 2026-08-30.** Fixing the floors was only half of it. `severity_scale` was **2.0**,
+> which saturates at `magnitude/max(speed,5) >= 0.5` — below the *minimum* of the observed pothole
+> distribution — so once the outlier gate was fixed and real clusters appeared, all but one landed
+> in the **top** tier: the same collapse as before, at the other end of the ramp. Scale is now
+> **0.25**, from `1/p95` measured over the cluster-admitted potholes, which spreads them 2/12/9/2.
+> Treat the floors and the scale as one calibration in two files. See §11.
+
 ## 3. Marker radii defeated their own encoding
 
 `circle-radius` was interpolated from 0.7× at z13 to 1× at z18. At the default z14 that made every
@@ -317,5 +324,39 @@ the re-seed procedure are in [`dashboard/README.md`](../../dashboard/README.md).
     un-tiled blob, one city only, without the rest of the basemap.
 - **KPI deltas** need a snapshot or time-series table before they can show a real figure.
 - **Self-hosted glyphs/sprites** — see §4.
-- Still open from Phase 2.5: no automated frontend tests, no `POST /auth/logout`, and the dashboard
-  bundle is not in the Docker image.
+- Still open from Phase 2.5: **no automated frontend tests**. (`POST /auth/logout` and the
+  dashboard bundle in the Docker image were listed here too; both shipped in Phase 2.6, §8 and §5.)
+
+## 11. Amendment 2026-08-30 — raw observations, and the legend was covering the controls
+
+Two changes from the [integration round](./integration-round-2026-08.md).
+
+**A raw-observation layer** (`SOURCE_OBSERVATIONS` in `map/layers.ts`). `GET /api/v1/tiles/observations`
+had existed and been tested since Phase 2.5 but was never wired into the frontend, so individual
+sensor readings appeared at no zoom on any surface. That mattered more than it sounds: only 110 of
+166 cluster-admitted observations land in a cluster, so a third of what the sensor reported was
+unreachable from the console. The layer is off by default behind a dock toggle, sits beneath the
+clusters, and draws **outlier-rejected readings hollow** — those are the rows the cluster member
+gate silently drops, and hiding them would make that gate unfalsifiable from the UI. Clicking one
+opens a popup with every attribute the tile carries, including unknown keys, so a new column in
+`_OBSERVATION_TILE_SQL` shows up without a frontend change.
+
+Two traps worth recording. The source needs its **own** `maxzoom`: written as
+`minzoom: 15, maxzoom: SOURCE_MAX_ZOOM` (14) the range is empty and MapLibre silently fetches
+nothing, which presents exactly like "no data". And `minzoom` is load-bearing rather than cosmetic —
+the endpoint 400s below `TILE_OBSERVATIONS_MIN_ZOOM` and an errored MapLibre tile never retries, so
+one request at z14 leaves a permanently dead tile.
+
+**The legend covered MapLibre's bottom-right controls.** At `bottom: var(--space-3)` it spanned
+y 653–865 against the zoom buttons at 765–823 and the attribution at 843–867; Playwright reported
+`.legend intercepts pointer events` when asked to click zoom-in. The attribution half is not
+cosmetic — the OSM/Protomaps basemap licence requires it to stay visible. `shell.ts` now measures the
+control stack and publishes `--map-ctrl-bottom-h`; the legend clears it with `calc()`. Measured
+rather than hardcoded because the attribution re-wraps on a narrow pane and the compact/expanded
+toggle changes its height at runtime.
+
+**Also corrected here:** this file's header described `severity_scale = 2.0`. It is now 0.25 — the
+old value saturated below the *minimum* of the observed pothole distribution, so every cluster
+painted in the top tier. `dashboard/src/severity.ts` had already recorded the mirror-image failure
+(floors above the ceiling, everything in tier 1). The tier floors and `SEVERITY_SCALE` are one
+calibration split across two files; changing either alone re-breaks the ramp.
