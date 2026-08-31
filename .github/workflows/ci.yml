@@ -1,0 +1,79 @@
+# Lint + full test suite against a real PostGIS.
+#
+# The suite is only meaningful with a database: the DB-backed fixtures cover
+# fusion, clustering, auth, tiles and the repair write path, and `tests/conftest.py`
+# skips them when Postgres is unreachable so the pure-unit tests still run on a
+# laptop. That leniency would make a broken service container here report a green
+# run with most of the suite silently skipped, so `_in_ci()` turns the skip into a
+# failure whenever `CI` is set — which GitHub Actions sets for us.
+#
+# `pothole_ci` is not an arbitrary name. conftest.py guards the fixtures behind an
+# allow-list of {pothole_test, pothole_ci} because they TRUNCATE every table, and
+# an accidental run against a database holding collected drive data is
+# unrecoverable. Point DATABASE_URL anywhere else and the suite refuses to run.
+
+name: CI
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Same image and version as docker-compose.yml. PostGIS is required:
+        # every geometry column is GEOGRAPHY(POINT, 4326) and the clustering job
+        # runs ST_ClusterDBSCAN. The plain postgres image will not do.
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: pothole
+          POSTGRES_PASSWORD: pothole
+          # The migration ledger in app/database.py applies migrations/*.sql on
+          # first use, including `CREATE EXTENSION IF NOT EXISTS postgis`, so an
+          # empty database is all this needs.
+          POSTGRES_DB: pothole_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pothole -d pothole_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # tests/__init__.py uses setdefault, so this wins. Note port 5432 here,
+      # not the 5433 docker-compose maps for local development.
+      DATABASE_URL: postgresql://pothole:pothole@localhost:5432/pothole_ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Dockerfile's python:3.12-slim and ruff's target-version.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        # requirements.txt already pins pytest, pytest-asyncio, httpx and ruff
+        # under "Dev / Test", so there is no separate dev install.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Test
+        # -p no:randomly is not needed; the DB fixture TRUNCATEs between tests.
+        run: pytest -q
