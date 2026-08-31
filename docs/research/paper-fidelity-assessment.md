@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 # How faithful is the server to the crowdsourcing paper?
@@ -371,24 +371,116 @@ random subsets drawn with the *same per-day counts* from the *same days* co-loca
 times. **0 of 30 draws reached the observed 0.** The pothole class is significantly
 *anti*-co-located.
 
+> ⚠️ **The paragraph above is wrong, and §4d retracts it.** The null it relies on is
+> computed over a population that mixes **two different instrument regimes**. Once the
+> regimes are separated the same test gives p ≈ 0.49 — an entirely ordinary zero. The
+> observation (zero co-location) stands; the inference (significantly anti-co-located)
+> does not. Left in place rather than deleted because the reasoning error is the
+> instructive part: the null controlled for per-day counts and for sparsity, but not for
+> the population being heterogeneous, and that is precisely what made it look decisive.
+
 **Also settled:** the corrected energy rule selects the same 241 observations as the
 shipped one, confirming that §3's `crack`/`not` swap does not affect which component is
 `pothole`. That bug is contained to the two classes nothing downstream reads.
 
+## 4d. Measured 2026-08-31: the swing is instrumentation, and §4c was confounded
+
+Reproduce every number below with `scripts/session_regimes.py` (read-only):
+`--regimes` for the session table, `--quarantine` for the retraction, `--power` for the
+control.
+
+Sessions derived from a 20-minute gap in each device's timeline give **12 sessions across
+2 devices**. They separate cleanly on one derived quantity -- `gbar_in_max / accel_max_g`,
+window energy over peak acceleration:
+
+| band | sessions | median `gbar/g` | pothole rate |
+|---|---|---|---|
+| low | 9 | 1.75 – 3.48 | **0.0 – 4.7 %** |
+| high | 3 | 9.91 – 19.05 | **20.4 – 24.2 %** |
+
+Neither column overlaps, and nothing falls in the corridor between 3.48 and 9.91. That
+single ratio orders the sessions by pothole rate essentially perfectly.
+
+**The raw accelerometer statistics do not separate the bands.** `accel_max_g` medians run
+1.64–3.40 and `accel_std` 0.45–0.74, and *both bands span that entire range*. Only the
+derived window features are inflated -- `magnitude` 4.1x, `gbar_in_max` 5.0x. The peak
+forces the phone measured are ordinary in both regimes; what differs is how much energy the
+app attributed to the window around each peak. The classifier keys on exactly that
+(`ratio`, `gbar`, `magnitude`), so it is largely reporting instrument state.
+
+Two distinct causes, not one:
+
+- **Sample rate.** `time_in_max` is quantised. All **4,539** observations from the main
+  phone lie on a 0.033548 s grid -- 29.81 Hz, a 15-sample window. The second phone is
+  **94.9 % off that grid**, on a grid 8x finer (0.0042 s ≈ 238 Hz). A window feature summed
+  over 8x the samples is inflated for nothing.
+- **Something else on 2026-08-25.** Sessions `4eb6:7` and `4eb6:8` are 100 % on the 29.81 Hz
+  grid, same device, same peak-to-trough gap, ordinary `accel_max_g` -- yet `gbar/g` is 3.6x
+  their own other sessions. Not a constant gain: the percentile curves *cross* at p10
+  (1.12 vs 1.35) and diverge above, so it is a mixture with far more sustained-energy
+  events. Mount or vehicle fits; the data cannot separate those.
+
+### Quarantining the regimes retracts §4c's inference
+
+Re-running the cross-day test within a single regime, with a null drawn from that regime
+only (200 draws):
+
+| population | obs | pothole | observed | null | draws ≤ observed |
+|---|---|---|---|---|---|
+| both regimes pooled *(this is §4c)* | 4,637 | 243 | 0 | 2–39, median 19 | **0 / 200** |
+| low band only, 9 sessions | 4,055 | 106 | 0 | 0–8, median 2 | **98 / 200** |
+| high band only, 3 sessions | 582 | 137 | 0 | 0–12, median 4 | 23 / 200 |
+
+Pooled, zero looks impossible (p < 0.005). Within the low band the same zero has
+**p ≈ 0.49** -- the null's own median is 2 and its range includes 0 nearly half the time.
+The high band contributes 137 of the 243 detections from 2 days, and permutation is free to
+scatter those across the pooled data; the real detections cannot cross regimes because the
+regimes barely overlap in space or time. That inflated the null and manufactured the
+significance.
+
+### The test has power -- potholes are simply too sparse for it
+
+The obvious worry is that nothing would co-locate here, making the whole method vacuous.
+It does not hold. Same low band, same geometry, same day-matched null:
+
+| class | n | observed | null | median | p(≥ obs) |
+|---|---|---|---|---|---|
+| pothole | 106 | 0 | 0–8 | 2 | 1.000 |
+| `crack` | 2,860 | **746** | 654–742 | 698 | **0.000** |
+| `not` | 1,089 | 175 | 119–212 | 159 | 0.165 |
+
+The dense class co-locates **above the top of its own null**. The pipeline -- sensor, GPS,
+25 m geometry, the null itself -- is demonstrably capable of detecting spatial
+reproducibility across days. The pothole class at n=106 over 5 days is below the density
+where this test can say anything at all.
+
+> Caveat on reading the middle row as a claim about cracks: §3's `_energy_order` swap means
+> the `crack` and `not` *labels* are exchanged, so the dense co-locating class cannot be
+> named with confidence. The power result does not depend on which name is right.
+
 ### What this means for the crowd layer
 
 Nothing in clustering, corroboration or classification can produce corroboration from
-detections that never recur in the same place. The crowd layer is now correct and has
-nothing to work with.
+detections that never recur in the same place -- and the crowd layer is now correct. But
+the reason there is nothing to work with has changed, and it is a much less alarming one:
 
-The signal worth chasing is upstream. The pothole rate per collection day runs **0.2%,
-0.3%, 1.4%, 3.3%, 9.5%, 14.6%, 24.2%** -- a 100x swing across the same roads. The road did
-not change 100x; the effective detection threshold did. The app records its per-session
-tuning (`sigma0`, `k_window`, `k_baseline`, `min_speed_mps`, ...) and
-[**never uploads it**](./app-capture-findings.md) (F5/F6), so this cannot currently be
-confirmed or corrected server-side. That makes the session-provenance upload -- already
-Phase 2.8's highest-value item -- the blocking dependency for crowdsourcing, not a
-nice-to-have.
+**The dataset is underpowered for the corroboration question, and the detections are not
+comparable across sessions.** Not "the detector is pathologically irreproducible". Zero
+corroborated defects is what 106 pothole detections over 5 days *should* produce.
+
+That reorders the next steps:
+
+1. **Repeat-route collection is now the top item, not the cheapest one.** It is the only way
+   to get statistical power: the same short loop, several passes, one unchanged instrument
+   state. Nothing analysable exists until then.
+2. **Session provenance is a confirmation, not a blocker.** The regime is already
+   fingerprintable from fields on the wire today -- `time_in_max` grid spacing gives the
+   sample rate, median `gbar/g` gives the energy-persistence regime. The upload
+   ([never sent](./app-capture-findings.md), F5/F6) would explain *why* a session drifted;
+   it is no longer needed to *see* that one did.
+3. **A session-regime fingerprint belongs in the pipeline.** Pooling regimes is what
+   produced a spurious result once already, and it would corrupt any cluster that mixed
+   them.
 
 ## 5. Summary table
 
@@ -420,5 +512,12 @@ of them.
 **And what fixing them did not do.** Every item above is now either faithful or a measured refusal,
 and the pipeline still produces **zero** corroborated defects. That is not a gap in the
 implementation — §4b and §4c establish that no clustering parameter, and no classification strategy,
-recovers a single cross-day repeat. The evidence is not there to integrate. The remaining lever is
-upstream of this document, in the detector and its per-drive calibration.
+recovers a single cross-day repeat. The evidence is not there to integrate.
+
+**Why the evidence is not there — corrected 2026-08-31.** §4c read that zero as proof the detector
+was anti-reproducible. §4d shows the null behind that reading pooled two instrument regimes; inside
+one regime the same zero is unremarkable (p ≈ 0.49), and a denser class over the same roads and days
+co-locates *above* the top of its null. So the honest verdict is **underpowered, not pathological**:
+106 pothole detections over 5 days cannot corroborate, and would not be expected to. The next lever
+is not a fix at all — it is collection designed for the question, several passes over one short loop
+in one unchanged instrument state.

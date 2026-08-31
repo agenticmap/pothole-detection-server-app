@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 # The first full integration round
@@ -330,6 +330,33 @@ measurements closed the remaining hypotheses: no clustering parameter recovers a
 repeat, and neither does per-survey classification (`crowd_sweep.py --sweep` / `--reclassify`,
 recorded in [`paper-fidelity-assessment.md`](../research/paper-fidelity-assessment.md) §4b–4c).
 The crowd layer is now faithful to the paper and has nothing to integrate.
+
+### Day three (2026-08-31): why there is nothing to integrate — and the retraction
+
+The zero stands. The explanation given for it above does **not**, and
+[`paper-fidelity-assessment.md`](../research/paper-fidelity-assessment.md) §4d has the full
+working.
+
+Deriving sessions from a 20-minute gap gives 12 sessions over 2 devices, and they split
+cleanly into two **instrument regimes** on `gbar_in_max / accel_max_g`: nine sessions at
+1.75–3.48 producing 0–4.7 % potholes, three at 9.91–19.05 producing 20.4–24.2 %, with an
+empty corridor between. Raw `accel_max_g` and `accel_std` span the *same* range in both
+bands, so the roads and the forces were comparable — only the app's derived window features
+differ (`magnitude` 4.1x, `gbar_in_max` 5.0x). One phone samples at ~238 Hz against the
+other's 29.81 Hz; 2026-08-25 shifted for a second, separate reason that is not a constant
+gain.
+
+**§4c's null pooled both regimes**, which is what made the zero look impossible. Redone
+within one regime it is ordinary — p ≈ 0.49 against a null whose own median is 2 — and a
+denser class over the same roads and days co-locates *above* the top of its null, so the
+test demonstrably has power. The corrected verdict is **underpowered, not irreproducible**:
+106 pothole detections over 5 days cannot corroborate and should not be expected to.
+
+Two consequences for planning. Repeat-route collection in one unchanged instrument state
+becomes the top item, because no analysis is possible without it. And session-provenance
+upload drops from *blocking dependency* to *confirmation*, because the regime is already
+fingerprintable server-side from fields on the wire today — `time_in_max` grid spacing for
+the sample rate, median `gbar/g` for the energy-persistence regime.
 
 ---
 
