@@ -539,7 +539,7 @@ All are run from the repo root and take `DATABASE_URL` from `.env`.
 | `scripts/requeue_frames.py` | Clear `processed_at` and re-run fusion over stored frames — the activation path after changing any `FUSION_*` pairing knob (Phase 2.2d) |
 | `scripts/device_gate_eval.py` | Sweep `CLUSTER_MIN_DISTINCT_DEVICES` and report what each floor costs, including whether clusters are corroboration or one pass. Read-only |
 | `scripts/crowd_sweep.py` | Sweep the clustering parameters, and reproduce the paper's survey-accumulation curve against self-consistency. Read-only |
-| `scripts/session_regimes.py` | Fingerprint each session's instrument state (sample rate, `gbar/accel_max_g`) and test co-location **within one regime** rather than across pooled ones. Read-only. `--power` is the positive control that keeps the result honest |
+| `scripts/session_regimes.py` | Audit the "potholes never co-locate" claim. `--coverage` is the decisive test — how many days actually drove near each detection, then a null conditioned on revisited road. `--regimes` fingerprints per-session sample rate; `--quarantine` reproduces a retracted result on purpose. Read-only |
 | `scripts/storage_audit.py` | Reconcile `storage/frames` against `asset_frame` both ways. Read-only by default; deletion **refuses a scratch database**, because a TRUNCATEd one makes every real frame look orphaned |
 
 Note the two guards point in **opposite** directions, deliberately: `seed_demo.py` writes

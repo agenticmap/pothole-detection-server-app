@@ -1,54 +1,71 @@
-"""Detect per-session instrument regimes, and test co-location within one — read-only.
+"""Audit the "potholes never co-locate" claim — read-only, writes nothing.
 
-This exists because `crowd_sweep.py --reclassify` produced a result that was
-statistically significant and wrong, and nothing in the codebase could have caught
-it. It reported that pothole detections co-locate across days **zero** times against
-a day-matched null of 10-35, 0 of 30 draws reaching the observed value, and concluded
-the detector was anti-reproducible.
+This file exists because that claim was published twice with two different
+explanations, and **both were wrong**. Each mode below is one link in that chain,
+kept runnable so the next person can re-derive it instead of trusting it. The
+write-up is `docs/research/corroboration-coverage-analysis.md`.
 
-The null controlled for total count, for per-day counts and therefore for sparsity.
-It did not control for the population being **heterogeneous**, and it is not.
+## The claim
 
-## The two regimes
+`crowd_sweep.py --reclassify` reported that of 243 pothole-classed observations,
+**zero** have another from a different day within 25 m, against a day-matched null
+of 10-35 with 0 of 30 draws reaching the observed value. Read as: the detector is
+anti-reproducible.
 
-Sessions (a 20-minute gap in a device's timeline, the same rule the clustering job
-uses for its pass key) split cleanly on `gbar_in_max / accel_max_g` — window energy
-over peak acceleration. Nine sessions sit at 1.75-3.48 and produce 0-4.7% potholes;
-three sit at 9.91-19.05 and produce 20.4-24.2%. Nothing falls between 3.48 and 9.91.
+## Wrong explanation #1 — instrument regimes (`--quarantine`)
 
-The raw statistics do NOT separate them: `accel_max_g` medians run 1.64-3.40 and
-`accel_std` 0.45-0.74, and both bands span that whole range. The roads and the forces
-were comparable. Only the app's DERIVED window features differ — `magnitude` 4.1x,
-`gbar_in_max` 5.0x — and those are what the classifier reads.
+Sessions split cleanly on `gbar_in_max / accel_max_g`: nine at 1.75-3.48 producing
+0-4.7% potholes, three at 9.91-19.05 producing 20.4-24.2%, nothing between. Restrict
+the null to one band and the same zero becomes ordinary (p ~ 0.49). That looked like
+the pooled null was mixing two instruments.
 
-At least two causes, and the modes below distinguish them:
+**It is circular.** `gbar` is the classifier's dominant input, so selecting low-`gbar`
+sessions *is* selecting low-pothole sessions; the resulting "not enough potholes for
+power" was manufactured by the selection. Two checks kill it. `gbar/g` is not a session
+property — every session is a mixture of the same two event types with near-identical
+low tails (p10 = 0.84-1.12) differing only in the *fraction* of high-`gbar` events, and
+that fraction is the pothole rate. And in grid cells both bands drove, the ordering
+**reverses** (high band 2.60, low band 7.63). A real instrument state does not flip
+depending on which road you look at.
 
-- **Sample rate.** `time_in_max` is quantised. One phone puts 100% of its
-  observations on a 0.033548 s grid (29.81 Hz, a 15-sample window); the other is
-  94.9% off it, on a grid 8x finer (~238 Hz). A window feature summed over 8x the
-  samples is inflated for free.
-- **Something per-session.** One day's sessions stayed on the 29.81 Hz grid, same
-  device, yet ran 3.6x their own usual ratio. Not a constant gain — the percentile
-  curves cross at p10 and diverge above, so it is a mixture with more sustained-energy
-  events. Mount or vehicle fits; this data cannot separate those.
+`--quarantine` is kept, and kept labelled, because the reasoning error is the
+instructive part.
 
-## Why the split matters more than the diagnosis
+## Wrong explanation #2 — none; the finding survived the clean control (`--device`)
 
-Pooled, the zero looks impossible. Inside one regime the SAME zero has p ~ 0.49
-against a null whose own median is 2. The high band contributes over half the
-detections from two days, and permutation scatters those freely across the pooled
-data while the real detections cannot cross regimes at all. That inflated the null
-and manufactured the significance.
+Stratifying by device instead — which is not downstream of the classifier — the zero
+holds: device 4eb6 alone, 223 potholes, observed 0 against a null of 2-27, 0/200 draws.
+So the finding was real and needed a different explanation, not a different slice.
 
-`--power` is the control that keeps the retraction honest: if nothing co-located at
-any density the method would be vacuous. The dense class co-locates ABOVE the top of
-its own null, so the geometry and the null work, and the pothole class at n=106 over
-5 days is simply below the density this test can resolve.
+## The actual explanation (`--coverage`)
+
+**91.9% of pothole-classed observations sit on road that only ONE day ever covered**
+(mean 1.09 distinct days within 25 m), against 68.4% for everything else. They cannot
+co-locate across days no matter how good the detector is. The null drew from all of
+that day's observations — only 68.4% single-visit — so random draws had systematically
+*more* opportunity than the real detections, and that gap is the entire effect.
+
+Condition on road at least two days actually covered and only **18** pothole detections
+remain in the whole dataset: observed 0 against a null of 0-7 whose own **median is 0**,
+p ~ 0.64. There is nothing left to explain.
+
+The corroboration failure is **route coverage**. Any future co-location claim must
+condition its null on coverage or it will reproduce this artefact.
+
+## Still standing
+
+`--regimes` also measures sample rate, and that result is independent and real: device
+a1878f6d puts 94.9% of its `time_in_max` off the 0.033548 s (29.81 Hz) grid that carries
+**100%** of the other phone's 4,539 observations — it samples ~8x faster. Only 98
+observations, and excluded from every clean test above, but two phones reporting
+incomparable window features is worth knowing before a second device is added.
 
 Usage (from the repo root):
 
     python scripts/session_regimes.py --regimes
-    python scripts/session_regimes.py --quarantine
+    python scripts/session_regimes.py --coverage            # the decisive one
+    python scripts/session_regimes.py --coverage --device 4eb6
+    python scripts/session_regimes.py --quarantine          # the wrong turn, kept
     python scripts/session_regimes.py --power
 """
 
@@ -67,8 +84,8 @@ from app.config import settings  # noqa: E402
 from app.database import create_pool  # noqa: E402
 
 # Anywhere in the empty 3.48-9.91 corridor gives the same partition. Picked at the
-# midpoint rather than tuned, so a new session that lands between the bands shows up
-# as ambiguous instead of being silently absorbed into whichever side is closer.
+# midpoint rather than tuned, so a session landing between the bands shows up as
+# ambiguous instead of being silently absorbed into whichever side is closer.
 BAND_SPLIT = 6.0
 
 # The accelerometer grid the main phone runs on: 15 samples over ~0.5 s. Derived from
@@ -116,44 +133,64 @@ def _on_grid(t: float | None) -> bool:
     return r < GRID_TOL or abs(r - GRID_S) < GRID_TOL
 
 
-def _colocated(picked: list[dict], key: str, radius_m: float) -> int:
-    """How many of `picked` have another of `picked` with a DIFFERENT `key` nearby.
+class _Index:
+    """Points bucketed into cells one search-radius wide.
 
-    Grid-bucketed at the search radius, so this is O(n) rather than O(n^2). The
-    brute-force version in crowd_sweep.py is fine for 243 points and takes minutes at
-    2,860, which is exactly the density the power control needs.
+    Both questions this script asks — "is there another point of a different day
+    nearby" and "how many distinct days came near this point" — are the same
+    neighbourhood walk, so they share one index. The brute-force version in
+    crowd_sweep.py is fine for 243 points and takes minutes at 2,860, which is exactly
+    the density the power control needs.
     """
-    if not picked:
-        return 0
-    lat0 = _median([r["lat"] for r in picked])
-    lon_scale = _M_PER_DEG_LAT * math.cos(math.radians(lat0))
-    dlat = radius_m / _M_PER_DEG_LAT
-    dlon = radius_m / lon_scale
 
-    grid: dict[tuple[int, int], list[dict]] = {}
-    for r in picked:
-        grid.setdefault((int(r["lat"] / dlat), int(r["lon"] / dlon)), []).append(r)
+    def __init__(self, rows: list[dict], radius_m: float) -> None:
+        self.radius = radius_m
+        lat0 = _median([r["lat"] for r in rows]) if rows else 0.0
+        self.lon_scale = _M_PER_DEG_LAT * math.cos(math.radians(lat0))
+        self.dlat = radius_m / _M_PER_DEG_LAT
+        self.dlon = radius_m / self.lon_scale if self.lon_scale else 1.0
+        self.cells: dict[tuple[int, int], list[dict]] = {}
+        for r in rows:
+            self.cells.setdefault(self._cell(r), []).append(r)
 
-    hits = 0
-    for a in picked:
-        gy, gx = int(a["lat"] / dlat), int(a["lon"] / dlon)
-        found = False
+    def _cell(self, r: dict) -> tuple[int, int]:
+        return (int(r["lat"] / self.dlat), int(r["lon"] / self.dlon))
+
+    def near(self, a: dict):
+        """Every indexed point within `radius` of `a`, including `a` itself."""
+        gy, gx = self._cell(a)
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
-                for b in grid.get((gy + dy, gx + dx), ()):
-                    if a["client_id"] == b["client_id"] or a[key] == b[key]:
-                        continue
-                    mx = (a["lon"] - b["lon"]) * lon_scale
+                for b in self.cells.get((gy + dy, gx + dx), ()):
+                    mx = (a["lon"] - b["lon"]) * self.lon_scale
                     my = (a["lat"] - b["lat"]) * _M_PER_DEG_LAT
-                    if math.hypot(mx, my) <= radius_m:
-                        found = True
-                        break
-                if found:
-                    break
-            if found:
-                break
-        hits += found
+                    if math.hypot(mx, my) <= self.radius:
+                        yield b
+
+
+def _colocated(picked: list[dict], key: str, radius_m: float) -> int:
+    """How many of `picked` have another of `picked` with a DIFFERENT `key` nearby."""
+    if not picked:
+        return 0
+    idx = _Index(picked, radius_m)
+    hits = 0
+    for a in picked:
+        hits += any(
+            b["client_id"] != a["client_id"] and b[key] != a[key] for b in idx.near(a)
+        )
     return hits
+
+
+def _annotate_coverage(rows: list[dict], radius_m: float) -> None:
+    """Set r["cov"] = how many distinct DAYS drove within `radius` of r.
+
+    Counted over ALL observations of any class, so this is a property of where the
+    driver went, not of what the classifier decided. That independence is the whole
+    point — it is what `--quarantine`'s band split lacked.
+    """
+    idx = _Index(rows, radius_m)
+    for a in rows:
+        a["cov"] = len({b["day"] for b in idx.near(a)})
 
 
 def _null(
@@ -161,9 +198,10 @@ def _null(
 ) -> list[int]:
     """Co-location for random subsets matched to `picked`'s per-`key` counts.
 
-    Crucially the draw pool is whatever `pool_rows` is — pass a single regime and the
-    null is built from that regime alone. Passing the whole database while `picked`
-    comes from one regime is the exact mistake this script documents.
+    The draw pool is whatever `pool_rows` is. Pass the population `picked` was actually
+    eligible to be drawn from — matching per-day counts alone is NOT enough, which is
+    the mistake this whole script documents. `--coverage` passes the coverage-eligible
+    subset for exactly that reason.
     """
     pools: dict = {}
     for r in pool_rows:
@@ -183,16 +221,14 @@ def _null(
     return sorted(out)
 
 
-async def _load(pool, gap_minutes: int) -> tuple[list[dict], dict[str, str]]:
+async def _load(pool, args) -> tuple[list[dict], dict[str, str]]:
     async with pool.acquire() as conn:
-        rows = [dict(r) for r in await conn.fetch(_SESSION_SQL, gap_minutes)]
-
-    by_sess: dict[str, list[dict]] = {}
-    for r in rows:
-        by_sess.setdefault(r["sess"], []).append(r)
+        rows = [dict(r) for r in await conn.fetch(_SESSION_SQL, args.pass_gap)]
+    if args.device:
+        rows = [r for r in rows if r["sess"].startswith(args.device)]
 
     band = {}
-    for sess, rs in by_sess.items():
+    for sess, rs in _sessions(rows).items():
         ratios = [
             r["gbar_in_max"] / r["accel_max_g"]
             for r in rs
@@ -209,8 +245,12 @@ def _sessions(rows: list[dict]) -> dict[str, list[dict]]:
     return out
 
 
+def _classes(rows: list[dict]) -> list[str]:
+    return sorted({r["sensor_class"] for r in rows if r["sensor_class"]})
+
+
 async def run_regimes(pool, args) -> int:
-    rows, band = await _load(pool, args.pass_gap)
+    rows, band = await _load(pool, args)
     print(
         f"{'session':<10} {'n':>5} {'gbar/g':>8} {'accel_g':>8} {'std':>6} "
         f"{'off-grid':>9} {'band':>5} {'pothole':>8}"
@@ -232,15 +272,77 @@ async def run_regimes(pool, args) -> int:
             f"{off:>8.1f}% {band[sess]:>5} {pot:>7.1f}%"
         )
     print(
-        "\nA session far off the 29.81 Hz grid sampled at a different rate; a high\n"
-        "gbar/g with an ordinary accel_g did not. Both break comparability, and a\n"
-        "cluster must not mix them."
+        "\nThe off-grid column is the real result here: a session far off the 29.81 Hz\n"
+        "grid sampled at a different rate, and two phones reporting incomparable window\n"
+        "features is worth knowing before a second device is added.\n"
+        "\nThe band column is NOT a real result — see --quarantine and the module\n"
+        "docstring. gbar/g is the classifier's own input, so banding on it is circular."
+    )
+    return 0
+
+
+async def run_coverage(pool, args) -> int:
+    """The decisive mode: was the road ever driven twice where the potholes were?"""
+    rows, _ = await _load(pool, args)
+    _annotate_coverage(rows, args.radius)
+
+    n_days = len({r["day"] for r in rows})
+    print(
+        f"{len(rows)} observations over {n_days} days"
+        f"{' (device ' + args.device + ')' if args.device else ''}\n"
+    )
+    print(f"How many distinct DAYS drove within {args.radius:.0f} m of each observation?")
+    print(f"\n  {'class':<18} {'n':>6} {'mean days':>10} {'single-day road':>17}")
+
+    def line(label: str, sub: list[dict]) -> None:
+        if not sub:
+            return
+        one = sum(1 for r in sub if r["cov"] == 1)
+        mean = sum(r["cov"] for r in sub) / len(sub)
+        print(f"  {label:<18} {len(sub):>6} {mean:>10.2f} {one / len(sub):>16.1%}")
+
+    for cls in _classes(rows):
+        line(cls, [r for r in rows if r["sensor_class"] == cls])
+    line("-- everything else", [r for r in rows if r["sensor_class"] != "pothole"])
+    line("-- all", rows)
+
+    # The conditioned test. Restricting BOTH the picked set and the draw pool to road
+    # that was actually revisited is the control the original null lacked: it compared
+    # detections that were 92% ineligible against random draws that were only 68%.
+    elig = [r for r in rows if r["cov"] >= 2]
+    print(
+        f"\nConditioned on road covered by >= 2 days: {len(elig)} observations "
+        f"({len(elig) / len(rows):.1%} of the data)\n"
+    )
+    print(f"  {'class':<10} {'n':>6} {'observed':>9} {'null':>10} {'median':>7} {'draws<=obs':>11}")
+    for cls in _classes(elig):
+        picked = [r for r in elig if r["sensor_class"] == cls]
+        if not picked:
+            continue
+        obs = _colocated(picked, "day", args.radius)
+        nl = _null(elig, picked, "day", args.radius, args.draws)
+        le = sum(1 for v in nl if v <= obs)
+        print(
+            f"  {cls:<10} {len(picked):>6} {obs:>9} "
+            f"{str(nl[0]) + '-' + str(nl[-1]):>10} "
+            f"{_median([float(v) for v in nl]):>7.0f} {f'{le}/{len(nl)}':>11}"
+        )
+    print(
+        "\nIf the pothole row's null median is 0, the dataset never gave a pothole a\n"
+        "second chance to be seen and the zero means nothing about the detector.\n"
+        "See docs/research/corroboration-coverage-analysis.md."
     )
     return 0
 
 
 async def run_quarantine(pool, args) -> int:
-    rows, band = await _load(pool, args.pass_gap)
+    """Kept as the documented WRONG TURN. Banding on gbar/g is circular — see docstring."""
+    rows, band = await _load(pool, args)
+    print(
+        "NOTE: this mode is retained to reproduce a retracted result. Splitting on\n"
+        "gbar/g splits on the classifier's own dominant input, so the low band is\n"
+        "'sessions with few potholes' by construction. Use --coverage.\n"
+    )
     for label, keep in (
         ("both regimes pooled (this is what --reclassify did)", lambda s: True),
         ("low band only", lambda s: band[s] == "low"),
@@ -263,28 +365,23 @@ async def run_quarantine(pool, args) -> int:
                 f"null {nl[0]}-{nl[-1]} (median {_median([float(v) for v in nl]):.0f})   "
                 f"draws <= observed: {le}/{len(nl)}"
             )
-    print(
-        "\nPooled, zero looks impossible. Within one regime it is ordinary. The pooled\n"
-        "null is the artefact, not the zero."
-    )
     return 0
 
 
 async def run_power(pool, args) -> int:
-    rows, band = await _load(pool, args.pass_gap)
-    low = [r for r in rows if band[r["sess"]] == "low"]
+    """Density control: at what n does co-location beat its null at all?"""
+    rows, _ = await _load(pool, args)
     print(
-        f"LOW band: {len(low)} observations, {len({r['day'] for r in low})} days, "
-        f"{len({r['sess'] for r in low})} sessions\n"
+        f"{len(rows)} observations, {len({r['day'] for r in rows})} days, "
+        f"{len({r['sess'] for r in rows})} sessions\n"
     )
     print(f"{'class':<10} {'n':>6} {'observed':>9} {'null':>12} {'median':>7} {'p(>=obs)':>9}")
-    classes = sorted({r["sensor_class"] for r in low if r["sensor_class"]})
-    for cls in classes:
-        picked = [r for r in low if r["sensor_class"] == cls]
+    for cls in _classes(rows):
+        picked = [r for r in rows if r["sensor_class"] == cls]
         if len(picked) < 5:
             continue
         obs = _colocated(picked, "day", args.radius)
-        nl = _null(low, picked, "day", args.radius, args.draws)
+        nl = _null(rows, picked, "day", args.radius, args.draws)
         p = sum(1 for v in nl if v >= obs) / len(nl)
         print(
             f"{cls:<10} {len(picked):>6} {obs:>9} "
@@ -292,12 +389,12 @@ async def run_power(pool, args) -> int:
             f"{_median([float(v) for v in nl]):>7.0f} {p:>9.3f}"
         )
     print(
-        "\nIf the dense class beats its null, the geometry and the null work and the\n"
-        "pothole class is merely too sparse to resolve. If nothing beats it at any\n"
-        "density, this whole test is vacuous and the retraction it supports is too.\n"
+        "\nThis null matches per-day counts only, so it does NOT control for coverage\n"
+        "and will overstate what the real detections could have achieved. It answers\n"
+        "one question honestly — whether the geometry can detect co-location at any\n"
+        "density — and nothing more.\n"
         "\nNote: section 3's _energy_order swap exchanges the `crack` and `not` LABELS,\n"
-        "so the dense class cannot be named with confidence. The power result does not\n"
-        "depend on which name is right."
+        "so the dense class cannot be named with confidence."
     )
     return 0
 
@@ -306,17 +403,26 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument(
-        "--regimes", action="store_true", help="Per-session instrument fingerprint"
+        "--coverage",
+        action="store_true",
+        help="Was the road ever driven twice where the potholes were? (the decisive test)",
+    )
+    mode.add_argument(
+        "--regimes", action="store_true", help="Per-session sample rate and gbar/g"
     )
     mode.add_argument(
         "--quarantine",
         action="store_true",
-        help="Cross-day co-location pooled vs within each regime",
+        help="Reproduce the retracted instrument-regime result (kept as a wrong turn)",
     )
     mode.add_argument(
-        "--power",
-        action="store_true",
-        help="Positive control: at what density does co-location beat its null?",
+        "--power", action="store_true", help="At what density does co-location beat its null?"
+    )
+    ap.add_argument(
+        "--device",
+        default=None,
+        help="Restrict to one device by its short id, e.g. 4eb6. Device is the only "
+        "stratification here that is not downstream of the classifier",
     )
     ap.add_argument("--pass-gap", type=int, default=settings.cluster_pass_gap_minutes)
     ap.add_argument("--radius", type=float, default=25.0, help="Co-location radius (m)")
@@ -328,6 +434,8 @@ async def main() -> int:
 
     pool = await create_pool()
     try:
+        if args.coverage:
+            return await run_coverage(pool, args)
         if args.regimes:
             return await run_regimes(pool, args)
         if args.quarantine:

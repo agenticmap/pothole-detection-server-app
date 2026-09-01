@@ -333,30 +333,42 @@ The crowd layer is now faithful to the paper and has nothing to integrate.
 
 ### Day three (2026-08-31): why there is nothing to integrate — and the retraction
 
-The zero stands. The explanation given for it above does **not**, and
-[`paper-fidelity-assessment.md`](../research/paper-fidelity-assessment.md) §4d has the full
-working.
+The zero stands. The explanation given for it above does **not**. Two explanations were
+tried and retracted the same day; the full working, both wrong turns included, is in
+[`corroboration-coverage-analysis.md`](../research/corroboration-coverage-analysis.md).
 
-Deriving sessions from a 20-minute gap gives 12 sessions over 2 devices, and they split
-cleanly into two **instrument regimes** on `gbar_in_max / accel_max_g`: nine sessions at
-1.75–3.48 producing 0–4.7 % potholes, three at 9.91–19.05 producing 20.4–24.2 %, with an
-empty corridor between. Raw `accel_max_g` and `accel_std` span the *same* range in both
-bands, so the roads and the forces were comparable — only the app's derived window features
-differ (`magnitude` 4.1x, `gbar_in_max` 5.0x). One phone samples at ~238 Hz against the
-other's 29.81 Hz; 2026-08-25 shifted for a second, separate reason that is not a constant
-gain.
+**The answer is route coverage.** Counting, over all observations of any class, how many
+distinct days drove within 25 m of each point:
 
-**§4c's null pooled both regimes**, which is what made the zero look impossible. Redone
-within one regime it is ordinary — p ≈ 0.49 against a null whose own median is 2 — and a
-denser class over the same roads and days co-locates *above* the top of its null, so the
-test demonstrably has power. The corrected verdict is **underpowered, not irreproducible**:
-106 pothole detections over 5 days cannot corroborate and should not be expected to.
+| device 4eb6 | n | mean days covering | on road only one day covered |
+|---|---|---|---|
+| pothole-classed | 223 | 1.09 | **91.9 %** |
+| everything else | 4,316 | 1.40 | 68.4 % |
 
-Two consequences for planning. Repeat-route collection in one unchanged instrument state
-becomes the top item, because no analysis is possible without it. And session-provenance
-upload drops from *blocking dependency* to *confirmation*, because the regime is already
-fingerprintable server-side from fields on the wire today — `time_in_max` grid spacing for
-the sample rate, median `gbar/g` for the energy-persistence regime.
+Nine in ten pothole detections are on road that was never revisited, so a cross-day repeat
+was geometrically impossible for them. The null drew from all of that day's observations —
+only 68.4 % single-visit — so the random draws had systematically more opportunity than the
+real detections ever had, and that gap is the entire effect. Conditioned on road at least
+two days actually covered, the whole dataset holds **18** pothole detections: observed 0
+against a null of 0–7 whose own median is **0**, p ≈ 0.64. Nothing left to explain.
+
+**A repeated claim in this document is wrong as a result.** The rate swing was described as
+happening "over the same roads". It was not — 69.5 % of all observations are on road only
+one day covered, so the days largely drove different routes. Different routes is now the
+leading explanation for the 0.2 % → 24.2 % swing, which does not clear the missing session
+provenance so much as leave it unproven as a cause.
+
+**One consequence for planning, and it is now measured rather than argued.** Repeat-route
+collection — a fixed loop, driven several times, one phone — is the only design under which
+the question is answerable: it takes the eligible fraction of detections from 8 % to 100 %
+by construction. Session-provenance upload is no longer the blocking dependency it was
+called above.
+
+One earlier finding is untouched, because it never depended on the retracted split: device
+`a1878f6d` puts 94.9 % of its `time_in_max` off the 0.033548 s (29.81 Hz) grid that carries
+100 % of the other phone's 4,539 observations, so it samples ~8× faster and inflates every
+window-summed feature. 98 observations, excluded from every test above, but it matters
+before a second device is added.
 
 ---
 

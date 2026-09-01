@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 # Documentation index
@@ -75,6 +75,7 @@ Findings, written to be read on their own and to source a report.
 | [`detection-research-record.md`](./research/detection-research-record.md) | Consolidated account of all five detection models. Headline: archive mAP50 spanned 0.030 while real-frame recall spanned 3.29× — the offline metric never once predicted quality. |
 | [`paper-fidelity-assessment.md`](./research/paper-fidelity-assessment.md) | **Where the implementation matches Sattar et al. and where it does not**, point by point, with the paper quoted. Also the measurements that closed three hypotheses: no clustering parameter, and no classification strategy, recovers a cross-day repeat. |
 | [`app-capture-findings.md`](./research/app-capture-findings.md) | The limiting factor is the data, not the detector: whole-second timestamps, reused GPS fixes, 25% padding, one night hour at 72 km/h. |
+| [`corroboration-coverage-analysis.md`](./research/corroboration-coverage-analysis.md) | **Why nothing corroborates: route coverage, not the detector.** 91.9% of pothole detections sit on road only one day ever covered, so they were never eligible to co-locate; conditioned on revisited road the dataset holds 18, against a null whose median is 0. Records two retracted explanations and why each got through. |
 | `research/probabilistic-crowdsourcing-road-anomaly-2018-SHS.docx` | The source paper the fusion engine implements (§4.4–4.5 are what Phase 2.2c encodes). **Not tracked in git** — `.gitignore` excludes `*.docx`, so this is a local file only. Originally filed as `3 - Probabilistic based crowdsourcing technique for road surface anomaly classification_Rev_Aug218_SHS.docx`. |
 
 ## reference

@@ -371,13 +371,20 @@ random subsets drawn with the *same per-day counts* from the *same days* co-loca
 times. **0 of 30 draws reached the observed 0.** The pothole class is significantly
 *anti*-co-located.
 
-> ⚠️ **The paragraph above is wrong, and §4d retracts it.** The null it relies on is
-> computed over a population that mixes **two different instrument regimes**. Once the
-> regimes are separated the same test gives p ≈ 0.49 — an entirely ordinary zero. The
-> observation (zero co-location) stands; the inference (significantly anti-co-located)
-> does not. Left in place rather than deleted because the reasoning error is the
-> instructive part: the null controlled for per-day counts and for sparsity, but not for
-> the population being heterogeneous, and that is precisely what made it look decisive.
+> ⚠️ **The paragraph above is wrong.** The null controls for total count and for per-day
+> counts — but not for **route coverage**, and that is what decides the outcome.
+> **91.9 % of pothole-classed observations sit on road only one day ever covered**, against
+> 68.4 % for everything else, so the random draws had systematically more opportunity to
+> co-locate than the real detections ever had. Condition on road at least two days actually
+> covered and the entire dataset holds **18** pothole detections: observed 0 against a null
+> of 0–7 whose own median is **0**, p ≈ 0.64.
+>
+> The observation (zero co-location) stands. The inference (significantly anti-co-located)
+> does not. Full working, including a second retracted explanation, in
+> [`corroboration-coverage-analysis.md`](./corroboration-coverage-analysis.md); reproduce
+> with `scripts/session_regimes.py --coverage`.
+>
+> Left in place rather than deleted because the reasoning error is the instructive part.
 
 **Also settled:** the corrected energy rule selects the same 241 observations as the
 shipped one, confirming that §3's `crack`/`not` swap does not affect which component is
@@ -385,9 +392,30 @@ shipped one, confirming that §3's `crack`/`not` swap does not affect which comp
 
 ## 4d. Measured 2026-08-31: the swing is instrumentation, and §4c was confounded
 
+> ⚠️ **RETRACTED the same day. This section's central claim is circular.** The band split
+> below is taken on `gbar_in_max / accel_max_g`, and `gbar` is the classifier's dominant
+> input — so selecting the low band *is* selecting sessions with few potholes, and the
+> "not enough potholes for power" conclusion was manufactured by the selection. Two
+> measurements confirm it: `gbar/g` is not a session property (every session is a mixture
+> of the same two event types with near-identical low tails, p10 = 0.84–1.12, differing
+> only in the fraction above ~6), and restricted to ground both bands drove the ordering
+> **reverses** (high band 2.60, low band 7.63).
+>
+> §4c's zero is real and survives the one legitimate stratification — by device, 223
+> potholes, observed 0 against a null of 2–27, 0/200 draws. The correct explanation is
+> route coverage, in [`corroboration-coverage-analysis.md`](./corroboration-coverage-analysis.md).
+>
+> **What survives from this section:** the sample-rate result. Device `a1878f6d` puts
+> 94.9 % of its `time_in_max` off the 29.81 Hz grid that carries 100 % of the other
+> phone's 4,539 observations. That never depended on the band split.
+>
+> Kept rather than deleted, as with §4c, because it is the more instructive of the two
+> errors — a null that controls for nothing is obvious, but one that stratifies on the
+> outcome looks rigorous.
+
 Reproduce every number below with `scripts/session_regimes.py` (read-only):
-`--regimes` for the session table, `--quarantine` for the retraction, `--power` for the
-control.
+`--regimes` for the session table, `--quarantine` for the retracted split, `--coverage`
+for the test that should have run first.
 
 Sessions derived from a 20-minute gap in each device's timeline give **12 sessions across
 2 devices**. They separate cleanly on one derived quantity -- `gbar_in_max / accel_max_g`,
@@ -468,19 +496,20 @@ the reason there is nothing to work with has changed, and it is a much less alar
 comparable across sessions.** Not "the detector is pathologically irreproducible". Zero
 corroborated defects is what 106 pothole detections over 5 days *should* produce.
 
-That reorders the next steps:
-
-1. **Repeat-route collection is now the top item, not the cheapest one.** It is the only way
-   to get statistical power: the same short loop, several passes, one unchanged instrument
-   state. Nothing analysable exists until then.
-2. **Session provenance is a confirmation, not a blocker.** The regime is already
-   fingerprintable from fields on the wire today -- `time_in_max` grid spacing gives the
-   sample rate, median `gbar/g` gives the energy-persistence regime. The upload
-   ([never sent](./app-capture-findings.md), F5/F6) would explain *why* a session drifted;
-   it is no longer needed to *see* that one did.
-3. **A session-regime fingerprint belongs in the pipeline.** Pooling regimes is what
-   produced a spurious result once already, and it would corrupt any cluster that mixed
-   them.
+> The three next-steps that stood here rested on the retracted regime split and have been
+> removed rather than left to be acted on — a wrong analysis is worth keeping, a wrong
+> instruction is not. Only the first survived, and it survived for a different reason.
+> The current list is in
+> [`corroboration-coverage-analysis.md`](./corroboration-coverage-analysis.md) §6:
+>
+> 1. **Repeat-route collection**, still the top item — but because it takes the eligible
+>    fraction of detections from 8 % to 100 % by construction, not because it holds an
+>    instrument state fixed.
+> 2. **Any future co-location claim must condition its null on coverage.** Matching
+>    per-day counts is not enough. It was not enough here, twice.
+> 3. **Session provenance** ([never sent](./app-capture-findings.md), F5/F6) is neither
+>    blocker nor confirmation now — differing routes explains the rate swing without it,
+>    so it is unproven as a cause either way.
 
 ## 5. Summary table
 
@@ -515,9 +544,13 @@ implementation — §4b and §4c establish that no clustering parameter, and no 
 recovers a single cross-day repeat. The evidence is not there to integrate.
 
 **Why the evidence is not there — corrected 2026-08-31.** §4c read that zero as proof the detector
-was anti-reproducible. §4d shows the null behind that reading pooled two instrument regimes; inside
-one regime the same zero is unremarkable (p ≈ 0.49), and a denser class over the same roads and days
-co-locates *above* the top of its null. So the honest verdict is **underpowered, not pathological**:
-106 pothole detections over 5 days cannot corroborate, and would not be expected to. The next lever
-is not a fix at all — it is collection designed for the question, several passes over one short loop
-in one unchanged instrument state.
+was anti-reproducible, and §4d blamed mixed instrument regimes. Both are retracted; the second was
+circular. The measured explanation is **route coverage**: 91.9 % of pothole detections sit on road
+only one day ever covered, against 68.4 % for everything else, so they were never eligible to
+co-locate and the null was drawn from a population that was. Conditioned on road actually revisited,
+the dataset holds **18** pothole detections and the null's own median is **0** (p ≈ 0.64).
+
+So the honest verdict is that the collection, not the pipeline, is what has to change: today 8 % of
+pothole detections are eligible for corroboration, and on a fixed loop driven repeatedly it is 100 %
+by construction. Full working in
+[`corroboration-coverage-analysis.md`](./corroboration-coverage-analysis.md).
