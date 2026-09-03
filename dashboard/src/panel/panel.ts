@@ -15,8 +15,18 @@
 import { ApiError, getCluster, setRepaired } from '../api.ts';
 import { clear, el, field, formatDateTime, formatNumber, plural } from '../dom.ts';
 import { severityLabel, tierFor } from '../severity.ts';
+import { notScoredNote, overlayBoxesFor, scoreLines } from '../frameview/evidence.ts';
+import { FrameViewer } from '../frameview/viewer.ts';
+import { FrameStage } from '../review/overlay.ts';
 import type { ClusterDetailResponse } from '../types.ts';
-import { loadFrames } from './frames.ts';
+import { spanNoteText } from './corroboration.ts';
+import { type FrameEntry, loadFrames } from './frames.ts';
+
+/** The corroboration warning, or nothing when the cluster is genuinely corroborated. */
+function spanNote(passes: number, spanS: number | null): HTMLElement | null {
+  const text = spanNoteText(passes, spanS);
+  return text === null ? null : el('p', { class: 'empty-note', text });
+}
 
 export interface PanelCallbacks {
   onClose: () => void;
@@ -28,6 +38,14 @@ export class DetailPanel {
   private readonly root: HTMLElement;
   private controller: AbortController | null = null;
   private current: ClusterDetailResponse | null = null;
+  /**
+   * One dialog for the panel's lifetime, opened with copies of the frame list.
+   *
+   * Built once rather than per open because a `<dialog>` in the top layer is cheap to
+   * keep and expensive to get wrong: creating one per click would leak an element on
+   * every thumbnail press.
+   */
+  private readonly viewer = new FrameViewer();
 
   constructor(
     container: HTMLElement,
@@ -64,8 +82,18 @@ export class DetailPanel {
     this.controller?.abort();
     this.controller = null;
     this.current = null;
+    // Closed with the panel: the viewer's content came from this panel's detail, so
+    // leaving it open over a closed panel would show frames for a cluster the
+    // operator has already dismissed.
+    this.viewer.close();
     this.root.hidden = true;
     clear(this.root);
+  }
+
+  /** Release the dialog. Sign-out and session expiry both route through here. */
+  destroy(): void {
+    this.close();
+    this.viewer.destroy();
   }
 
   /**
@@ -142,12 +170,18 @@ export class DetailPanel {
     body.append(
       el('section', { class: 'panel-section' }, [
         field('Corroborating devices', plural(detail.distinct_devices, 'device')),
-        field('Corroborating passes', plural(detail.distinct_passes ?? 0, 'pass', 'passes')),
+        field('Corroborating passes', plural(detail.distinct_passes, 'pass', 'passes')),
         field('Observations', String(detail.observation_count)),
         field('Confidence', formatNumber(detail.confidence, 2)),
         field('Last seen', formatDateTime(detail.last_seen)),
         field('Source', detail.source ?? '—'),
         field('Location', `${detail.lat.toFixed(5)}, ${detail.lon.toFixed(5)}`, true),
+        // member_span_s rendered as a judgement rather than a float. migrations/015
+        // calls it "the diagnostic that exposed the problem in the first place":
+        // a cluster whose members span seconds is one drive-past, and reporting
+        // "1 pass" without that context reads like a measurement rather than a
+        // warning that nothing has corroborated this defect yet.
+        spanNote(detail.distinct_passes, detail.member_span_s),
       ]),
     );
 
@@ -174,21 +208,86 @@ export class DetailPanel {
       return section;
     }
 
+    // One toggle for the whole grid rather than one per thumbnail. Unlike review,
+    // detector boxes are ON by default here: review hides them because showing a
+    // labeller where the model looked before they judge is the anchoring Phase 2.7b
+    // measured making the detector monotonically worse. A panel operator is triaging
+    // a repair, not producing ground truth, so that reasoning does not transfer —
+    // for them the boxes are the evidence.
+    let showBoxes = true;
+    const redraws: (() => void)[] = [];
+    const toggle = el('button', {
+      class: 'chip',
+      type: 'button',
+      'aria-pressed': 'true',
+      text: 'Detector boxes',
+    });
+    toggle.addEventListener('click', () => {
+      showBoxes = !showBoxes;
+      toggle.setAttribute('aria-pressed', String(showBoxes));
+      for (const redraw of redraws) redraw();
+    });
+    section.append(el('div', { class: 'chip-row' }, [toggle]));
+
     const grid = el('div', { class: 'frame-grid' });
-    const entries = detail.frames.map((frame) => {
-      const img = el('img', {
-        class: 'frame-thumb',
-        alt: `Frame captured ${formatDateTime(frame.ts)}`,
-        loading: 'lazy',
+    const entries: FrameEntry[] = detail.frames.map((frame) => {
+      const stage = new FrameStage({ variant: 'thumb' });
+      stage.setAlt(`Frame captured ${formatDateTime(frame.ts)}`);
+
+      const redraw = () =>
+        stage.draw(overlayBoxesFor(frame, { server: showBoxes, device: showBoxes }));
+      redraws.push(redraw);
+
+      // A cell of fixed ratio holds a stage that shrink-wraps the image. The old rule
+      // was `aspect-ratio: 4/3; object-fit: cover` over a PORTRAIT 480x640 corpus, so
+      // every thumbnail kept the middle ~56% of its height and threw away the top and
+      // bottom quarters — and on a forward-facing capture the road surface is in the
+      // bottom. It was invisible only because nothing drew boxes to expose it.
+      const cell = el('div', { class: 'frame-cell' }, [stage.root]);
+
+      // A real <button>, so the viewer is reachable by keyboard and announced as
+      // activatable. Styled back to nothing (.frame-open) — it must not look like a
+      // button, but it must behave like one.
+      const open = el('button', {
+        class: 'frame-open',
+        type: 'button',
+        'aria-label': `Open frame captured ${formatDateTime(frame.ts)} at full size`,
+      }, [cell]);
+      open.addEventListener('click', () => {
+        // The whole list, so the viewer can page through it. _FRAMES_SQL orders by
+        // fused_confidence DESC, so the order the operator sees is the order the
+        // pipeline ranked them.
+        this.viewer.open({ frames: detail.frames, index: detail.frames.indexOf(frame), trigger: open });
       });
-      const score =
-        frame.server_probability ?? frame.device_probability ?? null;
-      const caption =
-        frame.detected_at === null
-          ? 'not yet scored'
-          : `p=${formatNumber(score, 2)}`;
-      grid.append(el('figure', { class: 'frame' }, [img, el('figcaption', { text: caption })]));
-      return { img, frame };
+
+      const notScored = notScoredNote(frame);
+      const caption = el('figcaption', { class: 'frame-scores' });
+      if (notScored) {
+        caption.append(el('span', { class: 'frame-score-note', text: notScored }));
+      }
+      for (const line of scoreLines(frame)) {
+        caption.append(
+          el('span', { class: 'frame-score', title: line.title }, [
+            el('span', { class: 'frame-score-label', text: line.label }),
+            el('span', { class: 'frame-score-value mono', text: line.value }),
+          ]),
+        );
+      }
+      if (frame.vlm_verdict) {
+        // Presence only. The verdict itself needs room the caption does not have —
+        // but an operator must be able to tell, without a click, that this frame's
+        // server score is a blend rather than the detector's own number.
+        caption.append(
+          el('span', {
+            class: 'badge frame-vlm-badge',
+            text: 'VLM',
+            title: 'A VLM verified this frame — the server score is a blend.',
+          }),
+        );
+      }
+
+      grid.append(el('figure', { class: 'frame' }, [open, caption]));
+      return { stage, frame, onReady: redraw };
     });
     section.append(grid);
 

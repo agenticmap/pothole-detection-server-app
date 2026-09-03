@@ -269,7 +269,9 @@ body {
   color: var(--color-accent-2-text);
 }
 
-.frame-thumb {
+/* Retargeted from .frame-thumb: the border and radius now belong to the CELL, since
+ * the image no longer carries either — it fills a stage inside the cell. */
+.frame-cell {
   border-radius: var(--radius-md);
   border-color: var(--color-border);
 }

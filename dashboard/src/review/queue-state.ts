@@ -11,6 +11,7 @@
  * ledger, so the browser holds no authoritative state it could lose.
  */
 
+import type { DetectionBox, VlmVerdict } from '../types.ts';
 import { boxKey, type NormBox } from './geometry.ts';
 
 /** Server truth for one frame. Mirrors `app/models/review.py::ReviewFrameItem`. */
@@ -30,17 +31,16 @@ export interface ReviewFrame {
   /**
    * Detector boxes carry more than geometry -- `label` is the class NAME the model
    * assigned, which the overlay renders so class is not conveyed by hue alone.
-   * Mirrors app/models/clusters.py::DetectionBox.
+   *
+   * These are `DetectionBox` from types.ts, which is the accurate mirror of
+   * app/models/clusters.py::DetectionBox. A local `DetectorBox extends NormBox` used
+   * to live here and got both optionalities backwards -- it made `class_id` required
+   * and `confidence` optional, where the server has it the other way round. It never
+   * bit only because the overlay reads `class_id` for human boxes alone.
    */
-  server_boxes: DetectorBox[];
-  device_boxes: DetectorBox[];
-  vlm_verdict: unknown | null;
-}
-
-/** A box the detector produced. Same geometry convention as a human's. */
-export interface DetectorBox extends NormBox {
-  label?: string | null;
-  confidence?: number;
+  server_boxes: DetectionBox[];
+  device_boxes: DetectionBox[];
+  vlm_verdict: VlmVerdict | null;
 }
 
 export type FrameState = 'unjudged' | 'judged' | 'draft' | 'signed';

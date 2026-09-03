@@ -19,19 +19,25 @@ from tests.test_tiles import auth
 LAT, LON = 43.6532, -79.3832
 
 
-async def _insert_cluster(conn, cluster_id="clu_a", *, repaired=False):
+async def _insert_cluster(conn, cluster_id="clu_a", *, repaired=False,
+                          distinct_passes=3, member_span_s=259200.0):
+    # distinct_passes and member_span_s default to 0 / NULL in the schema, so a
+    # fixture that left them out would pass against a service that never selects
+    # them -- `0 == 0 ?? 0`. That is exactly how the panel came to print
+    # "0 passes" about every cluster while the table said 1. Write real values.
     await conn.execute(
         """
         INSERT INTO asset_cluster (
             cluster_id, asset_type, centroid, severity, confidence,
-            observation_count, distinct_devices, last_seen, source, repaired_at
+            observation_count, distinct_devices, distinct_passes, member_span_s,
+            last_seen, source, repaired_at
         ) VALUES (
             $1, 'pothole', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
-            2.5, 0.9, 3, 2, now(), 'crowd',
+            2.5, 0.9, 3, 2, $5, $6, now(), 'crowd',
             CASE WHEN $4 THEN now() ELSE NULL END
         )
         """,
-        cluster_id, LON, LAT, repaired,
+        cluster_id, LON, LAT, repaired, distinct_passes, member_span_s,
     )
 
 
@@ -92,6 +98,32 @@ class TestClusterDetail:
         assert body["members_truncated"] is False
         assert {m["device_ref"] for m in body["members"]} == {"A", "B", "C"}
         assert all("client_id" in m and "fused_confidence" in m for m in body["members"])
+
+    async def test_corroboration_fields_reach_the_client(self, client, db_pool):
+        """distinct_passes and member_span_s must survive the whole path.
+
+        They were declared on the client and consumed by the panel while
+        _HEADER_SQL never selected them and ClusterDetailResponse never defined
+        them, so the console asserted "0 passes" about every cluster. The fixture
+        writes 3 and 259200.0 precisely so a regression to the default cannot pass.
+        """
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn)
+
+        resp = await client.get("/api/v1/clusters/clu_a", headers=auth())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["distinct_passes"] == 3
+        assert body["member_span_s"] == pytest.approx(259200.0)
+
+    async def test_single_pass_cluster_reports_its_span(self, client, db_pool):
+        """The single-drive-past case, which is what the real corpus looks like."""
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, distinct_passes=1, member_span_s=12.0)
+
+        body = (await client.get("/api/v1/clusters/clu_a", headers=auth())).json()
+        assert body["distinct_passes"] == 1
+        assert body["member_span_s"] == pytest.approx(12.0)
 
     async def test_same_device_shares_one_device_ref(self, client, db_pool):
         """The corroboration signal: 3 hits from one device is not 3 devices."""

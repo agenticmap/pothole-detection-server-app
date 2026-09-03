@@ -60,6 +60,10 @@ SELECT
     ST_Y(c.centroid::geometry) AS lat,
     ST_X(c.centroid::geometry) AS lon,
     c.severity, c.confidence, c.observation_count, c.distinct_devices,
+    -- Both written by the clustering job (migrations/015). The panel has always
+    -- had a row for distinct_passes and this query never selected it, so the
+    -- console printed "0 passes" about every cluster while the table said 1.
+    c.distinct_passes, c.member_span_s,
     c.last_seen, c.source, c.repaired_at, c.created_at, c.updated_at
 FROM asset_cluster c
 WHERE c.cluster_id = $1
@@ -236,6 +240,10 @@ async def get_cluster_detail(
         confidence=header["confidence"],
         observation_count=header["observation_count"],
         distinct_devices=header["distinct_devices"],
+        # distinct_passes is INT NOT NULL DEFAULT 0 (015), so it needs no coalesce.
+        # member_span_s is nullable -- a single-member cluster has no span.
+        distinct_passes=header["distinct_passes"],
+        member_span_s=header["member_span_s"],
         last_seen=_iso(header["last_seen"]),
         source=header["source"],
         repaired_at=_iso(header["repaired_at"]),

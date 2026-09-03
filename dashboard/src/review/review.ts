@@ -32,7 +32,7 @@ import {
 import { FrameImageCache } from './images.ts';
 import { boxBindings, dispatch, REASON_TAGS, verdictBindings } from './keys.ts';
 import { isThin, type NormBox } from './geometry.ts';
-import { FrameStage, type OverlayBox } from './overlay.ts';
+import { detectorBoxLabel, FrameStage, type OverlayBox } from './overlay.ts';
 import {
   advance,
   applySubmit,
@@ -133,6 +133,18 @@ export class ReviewModule {
     // operator's hands never leave the keys, and removed in destroy().
     this.onKeyDown = (e) => {
       if (this.root.hidden) return;
+      // A modal <dialog> makes the rest of the document inert, so a CLICK cannot
+      // reach the page behind it -- but `keydown` listeners bound on the document
+      // still fire, and this is one. Without this guard, `j` pressed while the frame
+      // viewer is open advances the queue underneath it and `1` records a verdict on
+      // a frame the operator is examining through a modal: ground truth the promotion
+      // gate is judged on, written by a keystroke aimed at something else.
+      //
+      // The check lives here rather than in keys.ts::dispatch so that module stays
+      // pure and testable without jsdom -- its guards are the ones that stop a held
+      // key writing labels, and they are worth being able to test. Anything on the
+      // page, not just our own viewer, correctly suppresses the shortcuts.
+      if (document.querySelector('dialog[open]')) return;
       dispatch(this.bindings(), e);
     };
     document.addEventListener('keydown', this.onKeyDown);
@@ -660,8 +672,15 @@ export class ReviewModule {
     const classes = this.meta?.classes ?? [];
     const boxes: OverlayBox[] = [];
     if (this.showModelBoxes) {
+      // Both detector sets, and they are labelled apart. The server's model and the
+      // phone's disagree on 1,006 frames in this corpus, and until now the console
+      // drew only the server's — so a labeller had no way to see the disagreement
+      // they were, in effect, being asked to adjudicate.
       for (const b of entry.item.server_boxes) {
-        boxes.push({ ...b, kind: 'model', label: b.label ?? undefined });
+        boxes.push({ ...b, kind: 'server', label: detectorBoxLabel('srv', b) });
+      }
+      for (const b of entry.item.device_boxes) {
+        boxes.push({ ...b, kind: 'device', label: detectorBoxLabel('dev', b) });
       }
     }
     entry.boxes.forEach((b, i) => {
@@ -1232,9 +1251,9 @@ export class ReviewModule {
       // The stage takes the frame's own ratio so it can grow to fill the pane while
       // its box stays identical to the image's -- which is what keeps the overlay
       // exact without object-fit. Set per frame: this corpus mixes portrait and
-      // rotated-landscape captures.
-      const { naturalWidth: nw, naturalHeight: nh } = this.stage.img;
-      if (nw > 0 && nh > 0) this.stage.root.style.aspectRatio = `${nw} / ${nh}`;
+      // rotated-landscape captures. Lives on the stage so the next surface to mount
+      // a frame gets the contract by construction rather than by remembering.
+      this.stage.fit();
       // Drawn only after decode: boxes positioned against the previous image's
       // rendered size would be silently wrong.
       this.drawBoxes();

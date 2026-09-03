@@ -28,12 +28,47 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 /** The viewBox side. Normalized coordinates are multiplied by this. */
 const SCALE = 1000;
 
-export type BoxKind = 'human' | 'model';
+/**
+ * Who drew the box.
+ *
+ * `server` and `device` are split because they are different claims — the server's
+ * detector and the phone's disagree on 1,006 frames in this corpus — and a console
+ * that renders both as "the model" cannot show that. They are deliberately NOT
+ * distinguished by hue: the five class colours belong to human boxes, and a detector
+ * box must never look like a human's.
+ */
+export type BoxKind = 'human' | 'server' | 'device';
 
-export interface OverlayBox extends NormBox {
+export interface OverlayBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
   kind: BoxKind;
+  /**
+   * Class id, for the per-class hue. Optional and nullable because that is the
+   * server's shape (`DetectionBox.class_id`); only human boxes are guaranteed one.
+   */
+  class_id?: number | null;
   label?: string | undefined;
   selected?: boolean;
+}
+
+/**
+ * The class attribute for one box. Extracted from `draw()` so it can be tested.
+ *
+ * The rule it encodes was prose-only until now: a detector box carries NO
+ * `review-box-c*` class, so it can never borrow a human class hue.
+ */
+export function boxClassName(
+  kind: BoxKind,
+  classId: number | null | undefined,
+  selected: boolean,
+): string {
+  const parts = ['review-box', `review-box-${kind}`];
+  if (kind === 'human' && typeof classId === 'number') parts.push(`review-box-c${classId}`);
+  if (selected) parts.push('is-selected');
+  return parts.join(' ');
 }
 
 function svg<K extends keyof SVGElementTagNameMap>(
@@ -43,6 +78,31 @@ function svg<K extends keyof SVGElementTagNameMap>(
   const node = document.createElementNS(SVG_NS, tag);
   for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
   return node;
+}
+
+/**
+ * The on-image label for a detector box: `srv pothole 0.62`, `dev 0.48`.
+ *
+ * The three-letter prefix is the channel that actually separates server from device.
+ * The dash patterns in CSS are a mnemonic; the word is the answer, and it survives
+ * greyscale, deuteranopia and a photograph of asphalt behind it.
+ *
+ * `confidence` is included because it has never been on screen anywhere in this
+ * console — the map popup counts boxes, the panel showed one blended number, and
+ * review showed the class name alone.
+ */
+export function detectorBoxLabel(
+  prefix: 'srv' | 'dev',
+  box: { label?: string | null; confidence?: number | null },
+): string {
+  const parts: string[] = [prefix];
+  if (box.label) parts.push(box.label);
+  // Guarded on `typeof`, not truthiness: a confidence of exactly 0 is a real
+  // measurement and must print as 0.00 rather than vanish.
+  if (typeof box.confidence === 'number' && Number.isFinite(box.confidence)) {
+    parts.push(box.confidence.toFixed(2));
+  }
+  return parts.join(' ');
 }
 
 /**
@@ -66,8 +126,15 @@ export class FrameStage {
    */
   private readonly labels: HTMLElement;
 
-  constructor() {
-    this.img = el('img', { class: 'review-frame', alt: '' });
+  /**
+   * `variant` appends a modifier class to the stage and the image, so a second
+   * surface can size the stage differently without touching any of the rules above.
+   * Everything load-bearing lives on the unmodified classes and keeps applying.
+   */
+  constructor(opts: { variant?: string } = {}) {
+    const mod = opts.variant ? ` review-frame-${opts.variant}` : '';
+    const stageMod = opts.variant ? ` review-stage-${opts.variant}` : '';
+    this.img = el('img', { class: `review-frame${mod}`, alt: '' });
     this.layer = svg('svg', {
       class: 'review-overlay',
       viewBox: `0 0 ${SCALE} ${SCALE}`,
@@ -75,13 +142,30 @@ export class FrameStage {
       'aria-hidden': 'true',
     });
     this.labels = el('div', { class: 'review-box-labels', 'aria-hidden': 'true' });
-    this.root = el('div', { class: 'review-stage' });
+    this.root = el('div', { class: `review-stage${stageMod}` });
     this.root.append(this.img, this.layer, this.labels);
   }
 
   /** The image's rendered rectangle — the one coordinate space that matters. */
   rect(): DOMRect {
     return this.img.getBoundingClientRect();
+  }
+
+  /**
+   * Give the stage the decoded image's own aspect ratio. **Call after every load.**
+   *
+   * This is what makes the no-`object-fit` contract hold rather than merely being
+   * asserted: with the stage carrying the image's ratio, the stage box and the
+   * rendered content box are identical by construction, so `width/height: 100%` on
+   * the image distorts nothing and letterboxes nothing. It also lets the image scale
+   * *up* — `max-width`/`max-height` alone only ever cap.
+   *
+   * It lived in ReviewModule, which meant the next surface to mount a frame would
+   * have had to know to copy two lines or silently get every box coordinate wrong.
+   */
+  fit(): void {
+    const { naturalWidth: w, naturalHeight: h } = this.img;
+    if (w > 0 && h > 0) this.root.style.aspectRatio = `${w} / ${h}`;
   }
 
   setAlt(text: string): void {
@@ -116,12 +200,9 @@ export class FrameStage {
         height: b.h * SCALE,
         rx: 4,
         // The class_id rides in the CSS class, not an inline colour: the five hues
-        // are custom properties, so a theme flip repaints with no JS. Model boxes
+        // are custom properties, so a theme flip repaints with no JS. Detector boxes
         // stay deliberately neutral — they must never look like a human's.
-        class:
-          `review-box review-box-${b.kind}` +
-          (b.kind === 'human' ? ` review-box-c${b.class_id}` : '') +
-          (b.selected ? ' is-selected' : ''),
+        class: boxClassName(b.kind, b.class_id, b.selected === true),
         'vector-effect': 'non-scaling-stroke',
       });
       this.layer.append(rect);

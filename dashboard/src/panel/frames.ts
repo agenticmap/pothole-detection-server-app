@@ -15,25 +15,34 @@
  */
 
 import { getFrameObjectUrl } from '../api.ts';
+import type { FrameStage } from '../review/overlay.ts';
 import type { ClusterFrameItem } from '../types.ts';
 
 const MAX_CONCURRENT = 3;
 
-export async function loadFrameInto(
-  img: HTMLImageElement,
-  frame: ClusterFrameItem,
-  signal: AbortSignal,
-): Promise<void> {
+export interface FrameEntry {
+  stage: FrameStage;
+  frame: ClusterFrameItem;
+  /** Called once the image has decoded and the stage has been fitted. */
+  onReady?: (entry: FrameEntry) => void;
+}
+
+export async function loadFrameInto(entry: FrameEntry, signal: AbortSignal): Promise<void> {
   // image_url is already root-relative — never prefix it, or you get
   // /api/v1/api/v1/...
-  const objectUrl = await getFrameObjectUrl(frame.image_url, signal);
+  const objectUrl = await getFrameObjectUrl(entry.frame.image_url, signal);
   if (signal.aborted) {
     URL.revokeObjectURL(objectUrl);
     return;
   }
-  img.src = objectUrl;
+  entry.stage.img.src = objectUrl;
   try {
-    await img.decode();
+    await entry.stage.img.decode();
+    // fit() BEFORE the boxes are drawn. It gives the stage the decoded image's own
+    // aspect ratio, which is what makes the stage box and the rendered image box the
+    // same rectangle — the precondition every normalized box coordinate relies on.
+    entry.stage.fit();
+    entry.onReady?.(entry);
   } catch {
     // decode() rejects if the element was removed mid-flight; nothing to do.
   } finally {
@@ -42,21 +51,21 @@ export async function loadFrameInto(
 }
 
 /** Load frames with bounded concurrency, ignoring individual failures. */
-export async function loadFrames(
-  entries: { img: HTMLImageElement; frame: ClusterFrameItem }[],
-  signal: AbortSignal,
-): Promise<void> {
+export async function loadFrames(entries: FrameEntry[], signal: AbortSignal): Promise<void> {
   let cursor = 0;
   const workers = Array.from({ length: Math.min(MAX_CONCURRENT, entries.length) }, async () => {
     while (cursor < entries.length && !signal.aborted) {
       const entry = entries[cursor++];
       if (!entry) return;
       try {
-        await loadFrameInto(entry.img, entry.frame, signal);
+        await loadFrameInto(entry, signal);
       } catch {
         if (signal.aborted) return;
-        entry.img.classList.add('frame-error');
-        entry.img.alt = 'Image unavailable';
+        // The error class goes on the CELL, not the image: the image now fills a
+        // stage whose size comes from an aspect ratio that was never set, so a
+        // dashed border on it would have nothing to outline.
+        entry.stage.root.parentElement?.classList.add('frame-error');
+        entry.stage.setAlt('Image unavailable');
       }
     }
   });

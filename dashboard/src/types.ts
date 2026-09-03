@@ -90,10 +90,16 @@ export interface ClusterDetailResponse {
   confidence: number | null;
   observation_count: number;
   distinct_devices: number;
-  /** Distinct (device, drive) passes — the paper's unit of corroboration. */
-  distinct_passes?: number;
+  /**
+   * Distinct (device, drive) passes — the paper's unit of corroboration.
+   *
+   * Non-optional: these were declared optional here while the server never sent
+   * them, so `?? 0` in the panel silently rendered "0 passes" for every cluster.
+   * Requiring them means a future server that drops them fails to typecheck.
+   */
+  distinct_passes: number;
   /** Seconds between earliest and latest member; seconds means one drive-past. */
-  member_span_s?: number | null;
+  member_span_s: number | null;
   last_seen: string | null;
   source: string | null;
   repaired_at: string | null;

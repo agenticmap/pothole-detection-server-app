@@ -420,17 +420,48 @@ button:disabled {
   margin: 0;
 }
 
-.frame-thumb {
-  width: 100%;
-  aspect-ratio: 4 / 3;
-  object-fit: cover;
+/* A fixed-ratio CELL holding a shrink-wrapped stage.
+ *
+ * This replaced `aspect-ratio: 4/3; object-fit: cover` on the image itself, which
+ * was wrong twice over. It cropped: a 480x640 portrait frame in a 1.333 box keeps
+ * the middle ~56% of its height, and on a forward-facing capture the road surface is
+ * in the bottom quarter it threw away. And `object-fit` is incompatible with the box
+ * overlay — with cover or contain the rendered content box stops matching the
+ * element box, so every normalized coordinate is off.
+ *
+ * The cell keeps rows uniform; the stage inside it carries the image's OWN ratio
+ * (set by FrameStage.fit()), so the two boxes are identical by construction and the
+ * leftover space lands in the cell, where no coordinate lives. Portrait-first,
+ * because this corpus is portrait. */
+.frame-cell {
+  aspect-ratio: 3 / 4;
+  display: grid;
+  place-items: center;
   border-radius: var(--radius-sm);
   background: var(--color-surface-sunken);
   border: 1px solid var(--color-border);
-  display: block;
+  overflow: hidden;
 }
 
-.frame-thumb.frame-error {
+.review-stage-thumb {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* No per-box labels at thumbnail size. Measured in the browser: a cell is ~185px
+ * wide and "srv pothole 0.41" is ~90px of it, so three boxes on one frame bury the
+ * photograph they are annotating.
+ *
+ * This costs nothing in accessibility terms — detector boxes carry no class hue in
+ * the first place (server and device are both neutral, separated by dash rhythm), so
+ * hiding the text removes no colour-alone dependency. What a thumbnail answers is
+ * "did the detector fire, and where"; which class and how confidently is a question
+ * for the full-size viewer, where there is room to answer it. */
+.review-stage-thumb .review-box-label {
+  display: none;
+}
+
+.frame-cell.frame-error {
   border-style: dashed;
 }
 
@@ -439,6 +470,34 @@ button:disabled {
   color: var(--color-text-subtle);
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Two score rows, always both, never collapsed with `??`. The three-letter prefix
+ * is what separates them — position and a word, not a colour. */
+.frame-scores {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  align-items: baseline;
+}
+
+.frame-score-label {
+  color: var(--color-text-subtle);
+  margin-right: 2px;
+}
+
+.frame-score-value {
+  color: var(--color-text);
+}
+
+.frame-score-note {
+  flex-basis: 100%;
+  color: var(--color-warning);
+}
+
+.frame-vlm-badge {
+  font-size: 10px;
+  letter-spacing: 0.04em;
 }
 
 .member-list,
@@ -1263,7 +1322,8 @@ button:disabled {
   background: rgb(0 0 0 / 0.78);
 }
 
-.review-box-label-model {
+.review-box-label-server,
+.review-box-label-device {
   font-style: italic;
   opacity: 0.85;
 }
@@ -1302,13 +1362,29 @@ button:disabled {
 .review-box-c3 { stroke: var(--review-class-3); fill: color-mix(in oklab, var(--review-class-3) 12%, transparent); }
 .review-box-c4 { stroke: var(--review-class-4); fill: color-mix(in oklab, var(--review-class-4) 12%, transparent); }
 
-/* The model's: dashed and neutral, so they can never be mistaken for a human box.
- * Off by default and revealed with `b` — showing the labeller where the model looked
- * before they have judged is the anchoring Phase 2.7b measured making the detector
- * monotonically worse. */
-.review-box-model {
+/* The detectors': dashed and neutral, so they can never be mistaken for a human box.
+ * Off by default in review and revealed with `b` — showing the labeller where the
+ * model looked before they have judged is the anchoring Phase 2.7b measured making
+ * the detector monotonically worse.
+ *
+ * Server and device share the hue on purpose. The five class colours belong to human
+ * boxes, and inventing two more would put seven hues on one photograph. What tells
+ * them apart is the dash rhythm and, load-bearingly, the `srv` / `dev` prefix in the
+ * label — a word survives greyscale and deuteranopia; a dash pattern is a mnemonic. */
+.review-box-server,
+.review-box-device {
   stroke: var(--severity-unknown);
+}
+
+.review-box-server {
   stroke-dasharray: 6 4;
+}
+
+/* Finer and thinner than the server's, because where both fire on one defect the two
+ * rectangles very nearly coincide and a shared dash would read as one box. */
+.review-box-device {
+  stroke-width: 1.5;
+  stroke-dasharray: 2 3;
 }
 
 /* Selection has to win over the per-class stroke, and has to stay legible against
@@ -1480,3 +1556,214 @@ button:disabled {
 
 .review-flag.is-error { color: var(--color-danger); }
 .review-flag.is-warn { color: var(--color-warning); }
+
+/* ── The full-size frame viewer ─────────────────────────────────────────────────
+ *
+ * EVERY display rule here is scoped to [open]. The UA stylesheet is
+ * `dialog { display: none }` with only `dialog[open]` displayed, so an unscoped
+ * `.frame-dialog { display: grid }` wins on specificity and renders the dialog while
+ * it is CLOSED. This is the same trap as `[hidden]` (see the restatement block
+ * above), which already shipped as a bug once when the collapsed dock pill drew on
+ * top of the open dock.
+ *
+ * No z-index anywhere: showModal() puts the element in the top layer, which is above
+ * every stacking context including MapLibre's canvas. --z-modal stays unused. */
+.frame-dialog {
+  /* Reset the UA box. Its defaults are margin:auto + a 2px inset border + a
+   * max-width of calc(100% - 6px - 2em), none of which suit a full-bleed viewer. */
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  width: min(1400px, 94vw);
+  /* A DEFINITE height, not just a cap. With `max-height` alone the dialog sizes to
+   * its content, the content is the image, and the image sizes to the stage's
+   * `height: 100%` -- which then has nothing to resolve against. The result is a
+   * 480x640 frame rendered at 480x640 inside a 1400px dialog. Same shape as the
+   * `max-height: 68vh` bug in review: a cap can only ever shrink, never grow. */
+  height: 92vh;
+  overflow: hidden;
+}
+
+.frame-dialog::backdrop {
+  /* Dark rather than blurred: the point is to withdraw the map, and a blur over a
+   * vector canvas is expensive for no legibility gain. */
+  background: rgb(0 0 0 / 0.6);
+}
+
+.frame-dialog[open] .frame-dialog-inner {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* `height`, not `max-height`. The dialog is display:block, so this grid is a block
+   * child and its auto height sizes to content -- measured at 792px inside a 1104px
+   * dialog, which starved the 1fr row and left the frame at its native size.
+   *
+   * This is the THIRD place in this component where a cap could not do the job of a
+   * length: the dialog needed `height: 92vh` over `max-height`, the body needed an
+   * explicit `1fr` row over the implicit `auto` one, and this needed `height: 100%`.
+   * A definite height has to be handed down the whole chain, or the innermost
+   * element resolves its percentage against nothing. */
+  height: 100%;
+}
+
+.frame-dialog[open] .frame-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.frame-dialog-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-subtle);
+  overflow-wrap: anywhere;
+}
+
+/* Stage left, evidence rail right — the same division the review workspace uses, and
+ * the same --panel-width token, so the two surfaces feel like one tool. */
+.frame-dialog[open] .frame-dialog-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--panel-width);
+  /* Explicit, because the IMPLICIT row is `auto` and would size to its content --
+   * measured at 640px inside a 672px area, so the stage's `height: 100%` resolved
+   * against the image's own native height and the frame never grew. */
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--space-4);
+  padding: var(--space-4);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.frame-dialog[open] .frame-dialog-stage {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Same contract as every other stage: no object-fit, ratio set from the decoded
+ * image by FrameStage.fit(), so the stage box and the rendered image box are one
+ * rectangle and the overlay coordinates are exact. */
+.review-stage-viewer {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.frame-dialog-rail {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.frame-dialog-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-3);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.frame-dialog-facts dt {
+  color: var(--color-text-subtle);
+}
+
+.frame-dialog-facts dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.frame-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+}
+
+.frame-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.frame-legend-swatch {
+  width: 24px;
+  height: 8px;
+  /* The legend lines inherit .review-box, whose fill is transparent and whose
+   * drop-shadow is tuned for a photograph. On a panel surface the shadow reads as
+   * grime, so it is dropped here only. */
+  filter: none;
+}
+
+.frame-vlm-verdict {
+  align-self: flex-start;
+  margin: 0;
+}
+
+/* The rationale is unbounded free text from a third-party model. `anywhere` is the
+ * load-bearing part: one long unbroken token would otherwise force the grid wider
+ * than the dialog. Truncation is CSS's job, never the data layer's. */
+.vlm-rationale {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--color-border);
+  background: var(--color-surface-sunken);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.frame-dialog[open] .frame-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.frame-dialog-footer:empty {
+  display: none;
+}
+
+.frame-dialog-counter {
+  font-size: var(--text-sm);
+  color: var(--color-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+/* One column below the existing breakpoint, reusing it rather than adding one. */
+@media (max-width: 1023px) {
+  .frame-dialog[open] .frame-dialog-body {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+}
+
+/* A thumbnail button has to be a button for the keyboard, and must not look like one. */
+.frame-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--radius-md);
+}
+
+.frame-open:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}

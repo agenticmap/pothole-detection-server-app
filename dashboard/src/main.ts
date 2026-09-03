@@ -122,6 +122,10 @@ function renderApp(): void {
     dock?.destroy();
     review?.destroy();
     map = null;
+    // The panel owns a <dialog> appended to document.body, which is OUTSIDE the root
+    // the login screen replaces — so dropping the reference alone would leave the
+    // viewer in the DOM across a sign-out.
+    panel?.destroy();
     panel = null;
     dock = null;
     review = null;
