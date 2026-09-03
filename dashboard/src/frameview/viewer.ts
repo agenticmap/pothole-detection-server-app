@@ -107,6 +107,7 @@ export class FrameViewer {
       this.controller = null;
       this.revoke();
       this.stage.clear();
+      this.stage.resetRotation();
       this.stage.img.removeAttribute('src');
       // The spec restores focus itself, but the panel re-renders on several paths and
       // the trigger may no longer be connected — in which case focus lands on <body>.
@@ -153,6 +154,8 @@ export class FrameViewer {
     const next = this.index + step;
     if (next < 0 || next >= this.frames.length) return;
     this.index = next;
+    // A turn belongs to the frame it was applied to, not to the list.
+    this.stage.resetRotation();
     this.render();
     void this.loadImage();
   }
@@ -193,10 +196,29 @@ export class FrameViewer {
 
   private renderRail(frame: ClusterFrameItem): void {
     clear(this.rail);
+    // A turn is for looking at a frame that arrived sideways. View-only and reset on
+    // every open -- 20 legacy frames were corrected at rest by
+    // scripts/fix_frame_orientation.py, and a persisted rotation here would become a
+    // second answer to "which way is up", which is what that script eliminated.
+    const turn = el('button', {
+      class: 'chip',
+      type: 'button',
+      'aria-pressed': String(this.stage.rotation() !== 0),
+      text: 'Turn 90°',
+      title: 'Rotate the view for a frame that was stored sideways. Not saved.',
+    });
+    turn.addEventListener('click', () => {
+      const deg = this.stage.rotate();
+      turn.setAttribute('aria-pressed', String(deg !== 0));
+      turn.textContent = deg === 0 ? 'Turn 90°' : `Turned ${deg}°`;
+      this.drawBoxes();
+    });
+
     this.rail.append(
       el('div', { class: 'chip-row' }, [
         this.boxToggle('Server boxes', frame.server_boxes.length, 'server'),
         this.boxToggle('On-device boxes', frame.device_boxes.length, 'device'),
+        turn,
       ]),
       strokeLegend(),
       this.detectionSection(frame),

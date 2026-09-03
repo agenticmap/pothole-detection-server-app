@@ -719,6 +719,13 @@ button:disabled {
   .skeleton {
     animation: none;
   }
+
+  /* A 90-degree spin is exactly the kind of large-area motion this setting exists
+   * to suppress. The rotation still happens — it is the point of the control — it
+   * just arrives instantly. */
+  .review-stage[data-turned] {
+    transition: none;
+  }
 }
 
 /* ── Narrow screens: the panel becomes a bottom sheet ──────────────────── */
@@ -1766,4 +1773,31 @@ button:disabled {
 .frame-open:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+/* ── A turned frame view ────────────────────────────────────────────────────────
+ *
+ * The transform goes on the STAGE, not the image: the SVG overlay and the label
+ * layer are siblings of the <img> inside it, so turning the stage carries all three
+ * together and every box stays registered. Turning the image alone would leave the
+ * overlay behind.
+ *
+ * View-only, never persisted. Twenty legacy frames were corrected at rest by
+ * scripts/fix_frame_orientation.py; a rotation that survived a frame change would be
+ * a second answer to "which way is up", which is precisely what that removed. */
+.review-stage[data-turned] {
+  /* transform-origin stays at the centre so the compensating scale computed in
+   * FrameStage.applyRotation() is about the same point the rotation is. */
+  transform-origin: center center;
+  /* Matches the console's 150ms state timing. Suppressed under
+   * prefers-reduced-motion -- see the block above; the rule had to be ADDED there,
+   * it only covered .skeleton. */
+  transition: transform 150ms ease-out;
+}
+
+/* An outline so a turned view is never mistaken for the stored orientation --
+ * particularly in box mode, where drawing is suppressed while turned. */
+.review-stage[data-turned]:not([data-turned='']) {
+  outline: 2px dashed var(--color-warning);
+  outline-offset: 3px;
 }

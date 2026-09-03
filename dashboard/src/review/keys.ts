@@ -34,6 +34,8 @@ export interface VerdictActions {
   toggleModelBoxes: () => void;
   move: (step: number, shift: boolean) => void;
   reload: () => void;
+  /** View-only rotation, for the sideways legacy frames. Never persisted. */
+  rotate: () => void;
 }
 
 /** Reason tags, from the CLI. A tag is a shortcut for the commonest notes. */
@@ -81,6 +83,14 @@ export function verdictBindings(a: VerdictActions): Binding[] {
       run: (e) => a.move(-1, e.shiftKey),
     },
     { match: key('r'), keyLabel: 'r', description: 'Reload the queue', run: () => a.reload() },
+    {
+      // `t` for turn -- `r` is reload in both maps, and a rotate that reloaded the
+      // queue would be a spectacular way to lose a pass.
+      match: key('t'),
+      keyLabel: 't',
+      description: 'Turn the frame 90°',
+      run: () => a.rotate(),
+    },
   ];
 }
 
@@ -94,6 +104,8 @@ export interface BoxActions {
   toggleModelBoxes: () => void;
   move: (step: number, shift: boolean) => void;
   jump: (to: 'start' | 'end') => void;
+  /** View-only rotation. Drawing is disabled while it is non-zero. */
+  rotate: () => void;
 }
 
 /**
@@ -163,6 +175,14 @@ export function boxBindings(a: BoxActions, classNames: readonly string[]): Bindi
       keyLabel: 'End',
       description: 'Last frame (records nothing)',
       run: () => a.jump('end'),
+    },
+    {
+      // Same key as verdict mode. Drawing is suppressed while the frame is turned --
+      // a box drawn on a rotated view would be stored against the unrotated pixels.
+      match: key('t'),
+      keyLabel: 't',
+      description: 'Turn the frame 90° (drawing pauses)',
+      run: () => a.rotate(),
     },
   ];
 }

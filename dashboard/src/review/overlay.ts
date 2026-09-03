@@ -125,6 +125,8 @@ export class FrameStage {
    * scales with the image for free and stays legible.
    */
   private readonly labels: HTMLElement;
+  /** Quarter turns clockwise applied to the VIEW. Never persisted, reset per frame. */
+  private turns = 0;
 
   /**
    * `variant` appends a modifier class to the stage and the image, so a second
@@ -166,6 +168,67 @@ export class FrameStage {
   fit(): void {
     const { naturalWidth: w, naturalHeight: h } = this.img;
     if (w > 0 && h > 0) this.root.style.aspectRatio = `${w} / ${h}`;
+    this.applyRotation();
+  }
+
+  /**
+   * Turn the view a quarter clockwise. Returns the new rotation in degrees.
+   *
+   * **View only, and never persisted.** Every box coordinate in the database is
+   * normalized against the stored pixel buffer, so a rotation that outlived the
+   * moment would create a second answer to "which way is up" — which is exactly what
+   * `scripts/fix_frame_orientation.py` exists to eliminate. This is for looking at
+   * the occasional frame that arrived sideways, not for correcting one.
+   *
+   * The transform goes on the STAGE, not the image. The SVG overlay and the label
+   * layer are siblings of the `<img>` inside the stage, so turning the stage carries
+   * all three together and the boxes stay registered. Turning the image alone would
+   * leave the overlay behind — boxes drawn on rotated pixels at unrotated coordinates.
+   */
+  rotate(): number {
+    this.turns = (this.turns + 1) % 4;
+    this.applyRotation();
+    return this.turns * 90;
+  }
+
+  /** Back to the stored orientation. Called on every frame change. */
+  resetRotation(): void {
+    if (this.turns === 0) return;
+    this.turns = 0;
+    this.applyRotation();
+  }
+
+  /** Degrees clockwise the view is currently turned. 0 means stored orientation. */
+  rotation(): number {
+    return this.turns * 90;
+  }
+
+  private applyRotation(): void {
+    const deg = this.turns * 90;
+    this.root.dataset['turned'] = deg === 0 ? '' : String(deg);
+    if (deg === 0) {
+      this.root.style.transform = '';
+      return;
+    }
+
+    // The stage keeps the IMAGE's aspect ratio -- it has to, because `.review-frame`
+    // fills the stage and inverting the ratio would stretch the image before the
+    // rotation ever happened. So the layout box stays portrait while the rotated
+    // rendering is landscape, and at a quarter turn the long side overflows the cell.
+    //
+    // A transform does not affect layout, so nothing but a compensating scale can fix
+    // it. Measured rather than assumed: the stage already fits its container
+    // unrotated, so rotating swaps which dimension binds.
+    let scale = 1;
+    if (deg === 90 || deg === 270) {
+      const stage = this.root.getBoundingClientRect();
+      const box = this.root.parentElement?.getBoundingClientRect();
+      if (box && stage.width > 0 && stage.height > 0) {
+        scale = Math.min(box.width / stage.height, box.height / stage.width, 1);
+      }
+    }
+    this.root.style.transform =
+      scale === 1 ? `rotate(${deg}deg)` : `rotate(${deg}deg) scale(${scale.toFixed(4)})`;
   }
 
   setAlt(text: string): void {

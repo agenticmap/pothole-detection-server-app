@@ -158,7 +158,10 @@ export class ReviewModule {
     new ResizeObserver(() => this.drawBoxes()).observe(this.stage.img);
 
     this.stopDrawing = this.stage.enableDrawing({
-      isActive: () => this.isBox() && this.callbacks.canWrite(),
+      // Never while the view is turned: a drag would be converted to fractions of
+      // stage.rect(), which after a transform no longer maps to image space, so the
+      // box would be stored against the unrotated pixels in the wrong place.
+      isActive: () => this.isBox() && this.callbacks.canWrite() && this.stage.rotation() === 0,
       boxesAt: () => this.current()?.boxes ?? [],
       activeClass: () => this.activeClass,
       onDraw: (box) => this.addBox(box),
@@ -280,6 +283,34 @@ export class ReviewModule {
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Turn the view a quarter clockwise, for a frame that arrived sideways.
+   *
+   * View-only and never persisted — see `FrameStage.rotate`. 20 legacy frames were
+   * corrected at rest by `scripts/fix_frame_orientation.py`; this is the remedy for
+   * any future one-off, and the reason the rotation resets on every frame change is
+   * that it must never become a second answer to "which way is up".
+   *
+   * Drawing is suppressed while turned (see `enableDrawing`'s `isActive`), so the
+   * status line has to say so — otherwise a labeller drags, nothing happens, and the
+   * tool looks broken.
+   */
+  private turnFrame(): void {
+    const deg = this.stage.rotate();
+    this.drawBoxes();
+    if (deg === 0) {
+      this.setStatus('ok', 'Back to the stored orientation.');
+    } else if (this.isBox()) {
+      this.setStatus('warn', `Turned ${deg}° for viewing — drawing is paused. Press t to finish.`);
+    } else {
+      this.setStatus('ok', `Turned ${deg}° for viewing. Not saved.`);
+    }
+    this.announce(
+      deg === 0 ? 'Frame back to its stored orientation.' : `Frame turned ${deg} degrees.`,
+    );
+    this.render();
+  }
+
   private bindings() {
     if (this.isBox()) {
       return boxBindings(
@@ -299,6 +330,7 @@ export class ReviewModule {
           toggleModelBoxes: () => this.toggleModelBoxes(),
           move: (step, shift) => this.boxMove(step, shift),
           jump: (to) => this.boxJump(to),
+          rotate: () => this.turnFrame(),
         },
         this.meta?.classes ?? [],
       );
@@ -315,6 +347,7 @@ export class ReviewModule {
       toggleModelBoxes: () => this.toggleModelBoxes(),
       move: (step, shift) => this.move(step, shift),
       reload: () => void this.load(),
+      rotate: () => this.turnFrame(),
     });
   }
 
@@ -1255,6 +1288,10 @@ export class ReviewModule {
   }
 
   private async mountImage(entry: Entry): Promise<void> {
+    // A turn belongs to the frame the operator turned, not to the queue. Carrying it
+    // forward would silently show the NEXT frame rotated -- and since drawing is
+    // suppressed while turned, box mode would appear to have stopped working.
+    this.stage.resetRotation();
     this.images.pin(entry.item.client_id);
     this.images.syncWindow(
       this.entries.map((e) => e.item.client_id),
