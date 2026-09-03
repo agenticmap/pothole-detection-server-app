@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-30
+updated: 2026-09-03
 ---
 
 # Phase 2.9 — VLM verification: the instrument, and the thresholds it must replace
@@ -122,12 +122,27 @@ about that half — not about the whole set. The script prints this split on eve
 
 ### Results
 
-**Not yet run against a real model** — no provider is configured on this machine (Ollama is not
-installed). The path is verified end to end against a stub server: DB → ONNX → crop → HTTP → parse
-→ blend → report → cache, with the database confirmed unchanged (5,615 / 5,615 / 375 before and
-after). The stub returns hash-derived noise, and the report correctly scored it as noise —
-precision 0.333 against a 0.225 base rate — which is the behaviour you want from an instrument
-before you trust it on a real model.
+**Run against a real model on 2026-09-03** — `qwen2.5vl:3b` via Ollama, all 340 labelled frames,
+zero failures. Full write-up in [`phase-2.10-imagery-surfaces.md`](./phase-2.10-imagery-surfaces.md);
+the headline is that **the verdict carries no usable signal**: recall 0.015 (1 of 65 potholes) and
+precision 0.200 against a 0.191 base rate, a 1.05× lift. Its confidence is 0.8 or 0.9 on 96% of
+frames, so it cannot be thresholded, and the blend's best F1 is identical (0.382) for every weight
+from 0.00 to 0.70 — the VLM term is a near-constant offset. Its rationales negate this document's
+own `VERIFY_PROMPT` definition rather than describing the image.
+
+**§1's threshold findings are confirmed, and are not a VLM question.** The Stage-1 band table over
+340 frames reproduces them exactly — 0.30–0.40 at 1.96× against the gray zone's 1.34×, and
+0.75–1.01 holding one frame and zero potholes. `VLM_VERIFY_LOW`/`HIGH` are wrong for reasons that
+do not depend on which model answers, so they stay uncalibrated pending a model whose verdict
+separates anything.
+
+**The measurement also found a crash in the production crop path** that no stub could: `_crop`
+emitted crops below the vision encoder's patch factor and killed the model runner on 88 of 340
+calls. Fixed with a `MIN_CROP_PX` floor; see 2.10.
+
+The pre-existing stub verification stands as the instrument's own check: DB → ONNX → crop → HTTP →
+parse → blend → report → cache, database confirmed unchanged, and the report correctly scored
+hash-derived noise as noise (precision 0.333 against a 0.225 base rate).
 
 ## 4. Two constraints for whatever the measurement says
 

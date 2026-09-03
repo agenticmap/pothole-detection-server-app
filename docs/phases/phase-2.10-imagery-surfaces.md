@@ -215,20 +215,111 @@ It runs at **100% CPU**: the 4 GB RTX 3050 Ti cannot hold the ~10 GB working set
 roughly **40 s/frame** and a 340-frame sweep is about four hours. That is the number that decides
 how this measurement gets run, and it is a hardware fact, not a tuning one.
 
-### The 5-frame smoke, which is already a signal
+### A defect that only a real provider could surface
+
+The first full sweep lost **88 of 340** calls, all with the same 500: *"model runner has
+unexpectedly stopped, this may be due to resource limitations."* I took Ollama at its word and
+raised the container's memory twice.
+
+**That reading was wrong.** A rerun failed on *exactly the same 88 frames, immediately* — resource
+exhaustion does not pick the same victims twice. The real message was only in `docker logs ollama`:
+
+```
+height:12 or width:38 must be larger than factor:28
+height:22 or width:49 must be larger than factor:28
+```
+
+A vision encoder works in patches and rejects an image smaller than one — 28 px for this model,
+14 and 16 also in the wild. **`hybrid_v1._crop` had no minimum-size guard**, only a
+zero-or-negative area check. All 88 failures were cropped frames (100%, against 35% of the calls
+that succeeded), and the detector produces boxes a dozen pixels tall on a 480×640 frame routinely.
+
+This was reachable from ordinary data the moment cropping met a real provider, and it had never met
+one: all 42 hybrid and VLM tests run against stubs or a monkeypatched `urlopen`. On a cloud backend
+it might have been worse than a crash — a plausible verdict about a 12-pixel strip of asphalt.
+
+Fixed by growing the crop around its own centre to `MIN_CROP_PX = 64` rather than falling back to
+the full frame: the crop exists so the VLM sees the defect instead of the sky. 64 rather than the
+28 this model demands, because a crop that scrapes past one model's minimum breaks on the next.
+**With the fix: 340 of 340 answered, zero failures.**
+
+### The result: the verdict carries no usable signal
 
 | | said pothole | said not |
 |---|---|---|
-| **is a pothole** | 0 | 1 |
-| **is not** | 0 | 4 |
+| **is a pothole** | 1 | **64** |
+| **is not** | 4 | 271 |
 
-precision 0.000, recall 0.000, F1 0.000, **accuracy 0.800** — and every point of that accuracy
-comes from saying "no" to negatives. Five frames cannot support a conclusion; the full sweep over
-all 340 labelled frames is running to `runs/vlm-ollama-qwen3b.json`, which the script writes
-incrementally so any later analysis is free (`--analyse-only --sweep`).
+**recall 0.015** — it identified 1 of 65 potholes, and said "pothole" on 5 frames out of 340.
+Precision 0.200 against a **base rate of 0.191**: a 1.05× lift, which is indistinguishable from
+guessing "pothole" every time. Accuracy 0.800 is entirely the reward for saying "no" to a
+19%-positive set. `vlm_eval.py` prints the base rate next to precision precisely so this cannot be
+mistaken for a result.
 
-What this already establishes: **the path works end to end against a real model**, which no test in
-the suite covers — all 42 hybrid and VLM tests run against stubs or a monkeypatched `urlopen`.
+**The partial run overstated it.** Over the first 252 frames precision was 0.250 (a 1.6× lift).
+Adding the 88 that had been crashing dropped it to 0.200 — and those 88 are exactly the frames
+where Stage 1 found something small enough to crop tightly, i.e. the hard cases. Reporting the
+partial would have flattered the model.
+
+### Three mechanisms behind it
+
+**1. It recites the prompt instead of reading the image.** Its rationale on real potholes it
+rejected:
+
+> *"The image does not show a bowl-shaped cavity or broken-out section of the pavement surface."*
+
+That is `VERIFY_PROMPT`'s own definition, negated. Another lists the prompt's entire look-alike
+reject list verbatim — *"shadows, manhole covers, wet patches, tar crack-sealant lines, painted
+road markings, gravel"* — and reports that none are present. Across all 64 false negatives the
+commonest words are the prompt's own vocabulary: `bowl` 25, `shaped` 25, `broken` 24, `cavity` 23.
+The one true positive is the same sentence with the polarity flipped.
+
+**2. Its confidence is near-constant, so it cannot be thresholded.** Of 340 answers, **326 (96%)
+came back at exactly 0.8 or 0.9.** The remaining 14 are spread over 0.2, 0.3 and 0.5. A score with
+two values is not a score.
+
+**3. Therefore the blend contributes nothing at the shipped weight.** Best F1 is **identical at
+0.382 for `w` = 0.00, 0.30, 0.50 and 0.70** — pure Stage 1 and the configured blend give the same
+answer, because the VLM term is nearly a constant offset. Above that it degenerates: `w=0.90`
+reaches a recall ceiling of 65/65 by scoring everything high, and F1 falls to 0.358.
+
+### The shipped thresholds are refuted for the third time
+
+The Stage-1 band table over 340 frames **reproduces phase 2.9's numbers exactly**:
+
+| band | frames | pothole | lift |
+|---|---|---|---|
+| 0.30–0.40 | 16 | 6 | **1.96×** |
+| 0.40–0.75 | 39 | 10 | 1.34× |
+| 0.75–1.01 | 1 | **0** | 0.00× |
+
+`VLM_VERIFY_HIGH=0.75` auto-accept fires on one labelled frame and is wrong about it.
+`VLM_VERIFY_LOW=0.40` auto-reject would discard 62 of 65 potholes. And the band the gray zone
+*excludes* — 0.30–0.40 — has a 1.96× lift against the gray zone's own 1.34×. Phase 2.9 predicted
+all three from Stage-1 scores; this is the same conclusion with a real model in the loop, which
+means the thresholds were never a VLM-calibration question at all.
+
+Also reproduced: **Stage 1 produced a box on 176 of 340 frames (52%)**, against 2.9's 21 of 40
+(53%). So `VLM_CROP_TO_DETECTIONS` bites on about half the corpus, and the other half is sent as a
+full frame.
+
+### What this does and does not establish
+
+It establishes that the path works end to end against a real provider, and it found a crash in the
+production crop code that no stub could.
+
+It does **not** condemn the VLM design. It condemns *a 3B model at Q4 under a prompt that hands the
+model its own answer template*. The two next moves are a larger model — which needs GPU headroom
+this machine does not have, or a cloud backend, which
+[`phase-2.9`](./phase-2.9-vlm-verification.md) treats as a privacy decision rather than a config
+toggle — and a prompt that does not supply the conclusion. Neither is a reason to change
+`VLM_VERIFY_LOW`/`HIGH` yet, because the measurement says those two numbers are wrong for reasons
+that have nothing to do with which VLM answers.
+
+Throughput, for whoever runs the next one: **~40 s/frame at 100% CPU**, because the 4 GB card
+cannot hold the ~10 GB working set. A 340-frame sweep is about four hours. The cache
+(`runs/vlm-ollama-qwen3b.json`) makes every later analysis free — `--analyse-only --sweep` needs no
+model and no provider.
 
 ---
 
