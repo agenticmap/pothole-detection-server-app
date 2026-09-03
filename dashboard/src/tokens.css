@@ -137,9 +137,26 @@
   --review-class-3: #7c4dff; /* patch   — violet, dark enough to hold on sky */
   --review-class-4: #00e08a; /* crack   — green, separated by lightness from 0 */
 
-  /* Repaired sits deliberately OFF the ramp. A repaired defect is a different
-   * kind of thing, not a low severity. */
-  --color-repaired: #7d7364;
+  /* Repaired sits off the ramp AND away from the unrated grey. Both are drawn as
+   * CIRCLES, so unlike events-vs-frames shape cannot disambiguate them, and the old
+   * pair (#7d7364 vs #a19786) differed by a ratio of 1.62 -- with repaired dropping
+   * to opacity 0.55, which pushed it toward the lighter grey rather than away.
+   *
+   * A cool blue-grey against the warm neutral says "a different kind of thing", not
+   * "a lesser severity", which is the actual distinction. Separation is now 2.15, and
+   * it measures 5.21 on the canvas. */
+  --color-repaired: #4f6470;
+
+  /* The neutral for a marker with no classification: an unclassified sensor event,
+   * or a frame the detector never ran on.
+   *
+   * Its own token even though the value matches --severity-unknown, because
+   * --severity-unknown meant three different things at once (unrated cluster, other
+   * event class, unscored frame) and a token whose name lies about its job is how
+   * that happened. Sharing one VALUE is fine here: the three are now a circle, a
+   * triangle and a square, so shape carries the distinction and colour does not
+   * have to. */
+  --marker-neutral: #a19786;
 
   /* The halo is the ground, not white — markers read as cut out of the map. */
   --marker-halo: #f9f4ed;
@@ -278,7 +295,10 @@
   --color-success: #9ecf8a;
   --color-warning: #f6a06b;
 
-  --color-repaired: #8b8171;
+  /* See the light block. Separation from the dark unrated grey goes 1.12 -> 1.91,
+   * and this measures 6.28 on the dark canvas. */
+  --color-repaired: #9db0ba;
+  --marker-neutral: #82796a;
   --marker-halo: #2e2b25;
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);

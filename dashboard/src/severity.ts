@@ -112,13 +112,20 @@ export function severityLabel(severity: number | null | undefined): string {
  * The sentinel is -1 so a missing value lands below the first tier's 0 bound and
  * paints as "unrated" rather than as "low".
  */
-export function severityColorExpression(attribute = 'severity'): ExpressionSpecification {
-  const colors = severityColors();
-  const stops = SEVERITY_TIERS.flatMap((tier, i) => [tier.min, colors[i] ?? unknownColor()]);
+export function severityColorExpression(
+  attribute = 'severity',
+  // Injectable so a layer builder can be tested without a DOM: severityColors() and
+  // unknownColor() both read getComputedStyle, and the suite is node-environment.
+  // Defaults reproduce today's behaviour exactly, so no call site changes.
+  palette?: { tiers: readonly string[]; unknown: string },
+): ExpressionSpecification {
+  const colors = palette?.tiers ?? severityColors();
+  const unknown = palette?.unknown ?? unknownColor();
+  const stops = SEVERITY_TIERS.flatMap((tier, i) => [tier.min, colors[i] ?? unknown]);
   return [
     'step',
     ['coalesce', ['get', attribute], -1],
-    unknownColor(),
+    unknown,
     ...stops,
   ] as ExpressionSpecification;
 }

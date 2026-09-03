@@ -30,13 +30,16 @@ import {
   SOURCE_ID,
   SOURCE_LAYER,
   SOURCE_OBSERVATIONS,
+  aggregateCountLayer,
   aggregateLayer,
   framesLayer,
   individualLayer,
   observationsLayer,
 } from './layers.ts';
+import { registerMarkerIcons } from './marker-icons.ts';
 import { installTileAuthRecovery, refreshTokenCache, transformRequest } from './tile-auth.ts';
 import { SEVERITY_TIERS, UNRATED_LABEL, severityLabel } from '../severity.ts';
+import { cssVar } from '../tokens.ts';
 import { el } from '../dom.ts';
 import type { ExpressionSpecification, FilterSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { currentTheme, type Theme } from '../theme.ts';
@@ -248,6 +251,21 @@ export class PotholeMap {
   }
 
   private addClusterLayers(): void {
+    // FIRST, and inside this method on purpose. setStyle discards imperatively added
+    // IMAGES exactly as it discards sources and layers, and applyTheme calls setStyle
+    // on every theme flip -- so registration has to sit in the one place that rebuilds
+    // after a style swap. Getting this wrong shows up as every event and frame marker
+    // silently vanishing the first time someone toggles dark mode.
+    //
+    // The colours are read here, not inside the layer builders, because they are baked
+    // into the bitmaps: a theme flip must re-register with the new palette.
+    registerMarkerIcons(this.map, {
+      eventPothole: cssVar('--review-class-0'),
+      eventCrack: cssVar('--review-class-4'),
+      eventOther: cssVar('--marker-neutral'),
+      frameScored: cssVar('--color-accent-2'),
+      frameUnscored: cssVar('--marker-neutral'),
+    });
     this.map.addSource(SOURCE_ID, {
       type: 'vector',
       tiles: this.tiles(),
@@ -280,6 +298,7 @@ export class PotholeMap {
     this.map.addLayer(framesLayer());
     this.map.addLayer(observationsLayer());
     this.map.addLayer(aggregateLayer());
+    this.map.addLayer(aggregateCountLayer());
     this.map.addLayer(individualLayer());
     this.map.setLayoutProperty(
       LAYER_OBSERVATIONS,

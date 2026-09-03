@@ -14,6 +14,7 @@
 
 import { el } from './dom.ts';
 import { SEVERITY_TIERS, UNRATED_LABEL, severityColors, unknownColor } from './severity.ts';
+import { cssVar } from './tokens.ts';
 import { currentTheme, toggleTheme, type Theme } from './theme.ts';
 import type { MapView } from './map/map.ts';
 
@@ -354,7 +355,18 @@ function renderLegendItems(legend: Element): void {
   if (!list) return;
 
   const colors = severityColors();
-  const rows: Array<{ label: string; color: string; size: number; count: number | null }> =
+  const rows: Array<{
+    label: string;
+    color: string;
+    size: number;
+    count: number | null;
+    /** Circle unless stated: triangle = sensor event, square = camera frame. */
+    shape?: 'triangle' | 'square';
+    /** Outline only — "this reading reached no cluster". */
+    hollow?: boolean;
+    /** A low-zoom bin, not a defect. */
+    aggregate?: boolean;
+  }> =
     SEVERITY_TIERS.map((tier, i) => ({
       label: tier.label,
       color: colors[i] ?? unknownColor(),
@@ -369,13 +381,49 @@ function renderLegendItems(legend: Element): void {
   });
   rows.push({ label: 'Repaired', color: '', size: 12, count: counts?.repaired ?? null });
 
+  // ── What else is actually on screen ──────────────────────────────────────────
+  //
+  // The legend explained six severity states while about eleven marker states were
+  // drawn. Everything below was unexplained: the two raw-detection layers, the
+  // aggregate bin, and the hollow convention -- which is the layers' central visual
+  // grammar and appeared nowhere.
+  //
+  // Shape is the primary key now: a circle is a corroborated defect, a triangle one
+  // sensor reading, a square one camera image. The swatches say so.
+  rows.push({ label: 'Sensor event · pothole', color: cssVar('--review-class-0'), size: 11,
+              count: null, shape: 'triangle' });
+  rows.push({ label: 'Sensor event · crack', color: cssVar('--review-class-4'), size: 11,
+              count: null, shape: 'triangle' });
+  rows.push({ label: 'Camera frame', color: cssVar('--color-accent-2'), size: 11,
+              count: null, shape: 'square' });
+  rows.push({ label: 'Not yet scored', color: cssVar('--marker-neutral'), size: 11,
+              count: null, shape: 'square' });
+  rows.push({ label: 'Reached no cluster', color: cssVar('--marker-neutral'), size: 11,
+              count: null, shape: 'square', hollow: true });
+  rows.push({ label: 'Many defects (count shown)', color: unknownColor(), size: 16,
+              count: null, aggregate: true });
+
   const items = rows.map((row) => {
     const isRepaired = row.label === 'Repaired';
+    // The swatch has to be the SHAPE the map draws, or the legend is a different
+    // key from the one on screen -- which is the failure severity.ts's own header
+    // warns about ("three copies of a colour ramp is exactly how a legend silently
+    // stops matching its markers"). CSS shapes rather than a shared bitmap: the map's
+    // icons are canvas ImageData for MapLibre, and reusing them here would mean
+    // rasterising into an <img> for a 11px swatch.
+    const shapeClass = row.shape ? ` legend-dot-${row.shape}` : '';
+    const hollowClass = row.hollow ? ' legend-dot-hollow' : '';
+    const aggregateClass = row.aggregate ? ' legend-dot-aggregate' : '';
+    const fill = row.hollow
+      ? `border-color:${row.color}`
+      : `background:${row.color};border-color:${row.color}`;
     const dot = el('span', {
-      class: isRepaired ? 'legend-dot legend-dot-repaired' : 'legend-dot',
+      class: isRepaired
+        ? 'legend-dot legend-dot-repaired'
+        : `legend-dot${shapeClass}${hollowClass}${aggregateClass}`,
       style: isRepaired
         ? `width:${row.size}px;height:${row.size}px`
-        : `background:${row.color};width:${row.size}px;height:${row.size}px`,
+        : `${fill};width:${row.size}px;height:${row.size}px`,
       'aria-hidden': 'true',
       // In compact mode the label is gone, so the swatch has to carry it.
       title: row.count === null ? row.label : `${row.label} — ${row.count}`,

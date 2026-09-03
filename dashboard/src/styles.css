@@ -1801,3 +1801,44 @@ button:disabled {
   outline: 2px dashed var(--color-warning);
   outline-offset: 3px;
 }
+
+/* ── Legend swatches that match the map's shapes ────────────────────────────────
+ *
+ * The legend has to be the same key as the markers, or it is a different key. The
+ * map draws a circle for a corroborated defect, a triangle for one sensor reading and
+ * a square for one camera image; these reproduce that in CSS.
+ *
+ * `.legend-dot` is a circle by default (border-radius: 50%), so only the two other
+ * shapes need overriding. */
+/* Two classes, to out-specify organic-shell.css's `.legend-dot { border-radius:
+ * 999px }`. That file loads last and wins on equal specificity -- the house rule is
+ * to out-specify rather than reorder the imports. Measured: a single-class rule
+ * computed to 999px, i.e. still a circle. */
+.legend-dot.legend-dot-square {
+  border-radius: 2px;
+}
+
+/* A CSS triangle has to be a clip-path rather than the border trick: the border trick
+ * cannot carry a background, and hollow variants need an outline. */
+.legend-dot.legend-dot-triangle {
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  /* clip-path cuts the border off, so the shape carries its own colour only. */
+  border: 0;
+}
+
+/* Outline only — "this reading reached no cluster", the same grammar as a hollow
+ * marker on the map. */
+.legend-dot-hollow {
+  background: transparent !important;
+  border-width: 2px;
+  border-style: solid;
+}
+
+/* A low-zoom bin is not a defect: lower opacity plus a dashed edge, matching the
+ * aggregate layer's own lower opacity. The map version also carries a count. */
+.legend-dot-aggregate {
+  opacity: 0.8;
+  border-style: dashed;
+  border-width: 1.5px;
+}
