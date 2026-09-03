@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 # Phase 2.7d — The review surface, and a defect that would have poisoned the training set
@@ -296,6 +296,23 @@ proper semantic token in both themes.
 (4.76 / 4.50), staying a visible step lighter than `--color-text-muted` at 5.53 — the distinction
 the two tokens exist to make. That was **pre-existing and console-wide**: `panel.ts` uses
 `.empty-note` four times.
+
+> **Correction, 2026-09-03.** The heading above is wrong for that one token, and this section's
+> earlier claim that dark `--color-text-subtle` measured 6.81 / 5.87 was asserted rather than
+> computed. **There was no dark value to measure.** `#6e6659` was tuned against the light canvas
+> and surface — the two numbers quoted above are light-canvas and light-surface, not light and
+> dark — and it was inherited unchanged into the dark theme, where it measures **2.49 canvas /
+> 2.15 surface / 2.35 sunken**. Twenty-six rules consume the token, so every secondary label in
+> the console was effectively unreadable in dark mode for the whole of this phase.
+>
+> This is the identical defect to `--color-danger` recorded in the P0 table above, and it survived
+> the pass that found that one. The generalisation worth keeping: **a colour token defined in only
+> one theme block is the recurring shape of this bug.** `--color-text-muted` never had it, because
+> it resolves through `var(--ramp-neutral-700)` and each block redefines the ramp.
+>
+> Fixed in the following round: dark `--color-text-subtle: #aba191`, measuring 5.53 / 4.77 / 5.22,
+> verified in the browser from the computed style and the first non-transparent ancestor
+> background rather than from the token table. See `phase-2.10-imagery-surfaces.md`.
 
 ### Keyboard and screen reader
 
