@@ -21,7 +21,7 @@ import urllib.request
 import pytest
 
 from app.detection.vlm.local_http_v1 import DEFAULT_MODEL, LocalHttpVerifier
-from app.detection.vlm.registry import OPENAI_COMPATIBLE, get_verifier
+from app.detection.vlm.registry import OPENAI_COMPATIBLE, VlmProfile, get_verifier
 
 REPLY = '{"is_pothole": true, "confidence": 0.8, "severity": "deep", "rationale": "cavity"}'
 
@@ -211,3 +211,67 @@ class TestRegistry:
             vlm_http_url="http://x/v1/chat/completions",
         )
         assert isinstance(v, LocalHttpVerifier)
+
+
+# ── VlmProfile: a per-caller choice, not a global mutation ────────────────────
+
+
+def test_a_profile_does_not_touch_the_settings_singleton(monkeypatch):
+    """THE PROPERTY THIS TYPE EXISTS FOR.
+
+    get_verifier() read settings.vlm_backend, so a per-request choice was not
+    expressible. The only precedent for overriding it is scripts/vlm_eval.py, which
+    assigns to `settings` directly -- safe in a single-threaded CLI, and actively
+    dangerous in a request handler: under `uvicorn --workers 2` one request's mutation
+    changes the backend for every other request in flight, which for this feature
+    means roadway imagery sent to a provider the operator did not choose.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "vlm_backend", "none")
+    verifier = get_verifier(VlmProfile(backend="ollama", model_id="m"))
+    assert verifier is not None                 # the profile was honoured...
+    assert settings.vlm_backend == "none"       # ...and the singleton is untouched
+
+
+def test_no_profile_reproduces_todays_behaviour(monkeypatch):
+    """Additive by construction: every existing call site passes nothing."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "vlm_backend", "none")
+    assert get_verifier() is None
+    monkeypatch.setattr(settings, "vlm_backend", "ollama")
+    assert get_verifier() is not None
+
+
+def test_the_api_key_is_an_env_var_name_not_a_value(monkeypatch):
+    """So a profile can be logged or echoed without leaking a credential."""
+    monkeypatch.setenv("TEST_VLM_KEY", "sk-secret-value")
+    profile = VlmProfile(backend="openrouter", model_id="m", api_key_env="TEST_VLM_KEY")
+
+    # The secret appears nowhere in the profile itself.
+    assert "sk-secret-value" not in repr(profile)
+    assert profile.api_key_env == "TEST_VLM_KEY"
+    # But it resolves when actually needed.
+    assert profile.api_key() == "sk-secret-value"
+
+
+def test_an_unset_key_env_resolves_empty_rather_than_raising():
+    profile = VlmProfile(backend="ollama", api_key_env="NOT_SET_ANYWHERE_12345")
+    assert profile.api_key() == ""
+    assert VlmProfile(backend="ollama").api_key() == ""
+
+
+def test_openrouter_still_refuses_without_a_key(monkeypatch):
+    """The existing guard must survive the refactor -- it is what stops an
+    unauthenticated call to a paid endpoint."""
+    monkeypatch.delenv("NOT_SET_ANYWHERE_12345", raising=False)
+    with pytest.raises(ValueError, match="VLM_API_KEY"):
+        get_verifier(VlmProfile(backend="openrouter", api_key_env="NOT_SET_ANYWHERE_12345"))
+
+
+def test_a_profile_is_frozen():
+    """Immutable, so passing one around cannot become the mutation it replaced."""
+    profile = VlmProfile(backend="ollama")
+    with pytest.raises(Exception):
+        profile.backend = "openrouter"  # type: ignore[misc]

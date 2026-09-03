@@ -73,7 +73,8 @@ async def db_pool():
     # Clean slate for fusion/sensor tables so tests are independent.
     async with pool.acquire() as conn:
         await conn.execute(
-            "TRUNCATE device_rate_limit, repair_log, refresh_token, org_member, staff_user, org, "
+            "TRUNCATE user_quota, device_rate_limit, repair_log, refresh_token, org_member, "
+            "staff_user, org, "
             "observation_cluster_link, asset_cluster, cluster_run, "
             "model_disagreement, frame_box, frame_label_history, frame_label, fusion_pair, "
             "fusion_run, sensor_model, "

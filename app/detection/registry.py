@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.config import settings
 from app.detection.engine import FrameDetector
+from app.detection.vlm.registry import VlmProfile
 
 
 def _build_detector(backend: str) -> FrameDetector | None:
@@ -38,8 +39,14 @@ def _build_detector(backend: str) -> FrameDetector | None:
     return None
 
 
-def get_detector() -> FrameDetector | None:
-    """Pick the detector for settings.detection_backend, or None for 'none'."""
+def get_detector(vlm_profile: VlmProfile | None = None) -> FrameDetector | None:
+    """Pick the detector for settings.detection_backend, or None for 'none'.
+
+    `vlm_profile` is threaded to the hybrid backend's verifier so a caller can
+    choose a VLM per request instead of mutating the process-wide settings
+    singleton -- see app/detection/vlm/registry.py::VlmProfile for why that
+    distinction matters. Additive: the default is today's behaviour exactly.
+    """
     backend = settings.detection_backend
     if backend == "hybrid":
         from app.detection.hybrid_v1 import HybridDetector
@@ -52,7 +59,7 @@ def get_detector() -> FrameDetector | None:
             )
         return HybridDetector(
             stage1=stage1,
-            verifier=get_verifier(),
+            verifier=get_verifier(vlm_profile),
             low=settings.vlm_verify_low,
             high=settings.vlm_verify_high,
             blend_weight=settings.vlm_blend_weight,
