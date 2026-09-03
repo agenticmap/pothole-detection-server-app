@@ -11,7 +11,11 @@ import pytest
 from PIL import Image
 from PIL.TiffImagePlugin import IFDRational
 
-from app.services.jpeg_metadata import strip_jpeg_metadata
+from app.services.jpeg_metadata import (
+    apply_exif_orientation,
+    exif_orientation,
+    strip_jpeg_metadata,
+)
 
 
 def _jpeg_with_exif() -> bytes:
@@ -119,3 +123,80 @@ def test_malformed_input_is_returned_not_raised(blob):
     """Conservative by design: a frame is never lost because parsing failed."""
     out = strip_jpeg_metadata(blob)
     assert isinstance(out, bytes)
+
+
+# ── EXIF Orientation, applied before the strip ────────────────────────────────
+#
+# The strip drops APP1, which is where Orientation lives. For this system's Android
+# client that is a no-op -- it writes no EXIF at all -- but the pixel buffer's own
+# shape is the ONLY orientation record the system has, so a source that did write the
+# tag would have its only record silently deleted and would then display sideways.
+#
+# 20 frames from a pre-2026-08-19 client build are sideways on disk for the
+# neighbouring reason and had to be corrected by hand. These tests cover the version
+# of that hole a tag-writing source would fall into.
+
+
+def _jpeg_with_orientation(value: int, size=(24, 16)) -> bytes:
+    img = Image.new("RGB", size, (200, 40, 40))
+    exif = img.getexif()
+    exif[0x0112] = value
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", exif=exif, quality=90)
+    return buf.getvalue()
+
+
+def test_orientation_is_read_before_it_is_stripped():
+    assert exif_orientation(_jpeg_with_orientation(6)) == 6
+    assert exif_orientation(_jpeg_with_orientation(1)) == 1
+
+
+def test_a_frame_with_no_exif_reports_no_orientation():
+    # The whole corpus. Must not be confused with "orientation 1".
+    assert exif_orientation(_plain_jpeg()) is None
+
+
+def test_the_no_exif_path_returns_the_identical_object():
+    """`is`, not `==`: the common case must not even copy, let alone re-encode.
+
+    The strip is a byte-level segment walk with no decode, deliberately. If applying
+    orientation decoded every frame it would put a JPEG round-trip in the ingestion
+    path for the 100% of frames that do not need one.
+    """
+    plain = _plain_jpeg()
+    assert apply_exif_orientation(plain) is plain
+
+    upright = _jpeg_with_orientation(1)
+    assert apply_exif_orientation(upright) is upright
+
+
+def test_orientation_6_rotates_the_pixels():
+    """A 24x16 landscape frame tagged "rotate 90" must come out 16x24 portrait."""
+    out = apply_exif_orientation(_jpeg_with_orientation(6, size=(24, 16)))
+    with Image.open(io.BytesIO(out)) as im:
+        assert im.size == (16, 24)
+
+
+def test_the_applied_orientation_survives_the_strip():
+    """End to end, in the order frame_service calls them."""
+    stored = strip_jpeg_metadata(apply_exif_orientation(_jpeg_with_orientation(6)))
+    assert b"Exif\x00\x00" not in stored          # the tag is gone, as intended
+    with Image.open(io.BytesIO(stored)) as im:
+        assert im.size == (16, 24)                # but its meaning was kept
+
+
+def test_stripping_first_would_have_lost_it():
+    """The bug this guards against, asserted directly.
+
+    Reversing the two calls throws the rotation away: the tag is stripped, so
+    apply_exif_orientation then has nothing to act on and the pixels stay landscape.
+    """
+    wrong_order = apply_exif_orientation(strip_jpeg_metadata(_jpeg_with_orientation(6)))
+    with Image.open(io.BytesIO(wrong_order)) as im:
+        assert im.size == (24, 16)  # still sideways — which is the point
+
+
+@pytest.mark.parametrize("blob", [b"", b"\xff\xd8", b"\xff\xd8\xff", b"not a jpeg at all"])
+def test_orientation_never_raises_on_junk(blob):
+    assert exif_orientation(blob) is None
+    assert apply_exif_orientation(blob) is blob

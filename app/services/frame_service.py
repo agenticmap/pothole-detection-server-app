@@ -10,7 +10,7 @@ import asyncpg
 
 from app.config import settings
 from app.models.frames import FrameMetadata, FrameUploadResponse
-from app.services.jpeg_metadata import strip_jpeg_metadata
+from app.services.jpeg_metadata import apply_exif_orientation, strip_jpeg_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,12 @@ async def store_frame(
     # Done here rather than in a backend so local and Supabase storage both get
     # it, and done before the write so the archive never holds the EXIF at all
     # (scrubbing later would leave it in any backup taken in between).
-    clean_bytes = strip_jpeg_metadata(jpeg_bytes)
+    # Orientation FIRST, then strip. The strip drops APP1, which is where the EXIF
+    # Orientation tag lives, so doing it the other way round throws away the only
+    # record of which way is up. A no-op for this client (it writes no EXIF), but 20
+    # frames already had to be rotated by hand for the neighbouring reason.
+    upright_bytes = apply_exif_orientation(jpeg_bytes)
+    clean_bytes = strip_jpeg_metadata(upright_bytes)
     if len(clean_bytes) != len(jpeg_bytes):
         logger.debug(
             "Stripped %d bytes of JPEG metadata from frame %s",
