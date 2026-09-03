@@ -11,7 +11,7 @@ import io
 import pytest
 
 from app.detection.engine import DetectionResult
-from app.detection.hybrid_v1 import HybridDetector
+from app.detection.hybrid_v1 import MIN_CROP_PX, HybridDetector
 from app.detection.vlm.base import VlmVerdict, parse_verdict
 
 JPEG = b"\xff\xd8\xff\xe0fake-jpeg-bytes"
@@ -223,10 +223,17 @@ def _crop_via_detect(detections, *, crop_margin=0.0, image=None):
 
 
 def test_crop_takes_the_union_of_every_box():
-    # 200x100 image. Box A → px (20,20)-(60,50); box B → px (100,60)-(120,80).
-    # Union is (20,20)-(120,80), i.e. 100x60. Neither box alone gives that.
-    cropped = _crop_via_detect([_box(0.1, 0.2, 0.2, 0.3), _box(0.5, 0.6, 0.1, 0.2)])
-    assert _size(cropped) == (100, 60)
+    # 800x400 image. Box A → px (80,80)-(240,200); box B → px (400,240)-(480,320).
+    # Union is (80,80)-(480,320), i.e. 400x240. Neither box alone gives that.
+    #
+    # Deliberately larger than the 200x100 default: on that frame the union is
+    # 100x60 and MIN_CROP_PX would widen the height to 64, which is correct
+    # behaviour but masks the union arithmetic this test exists to check. A real
+    # frame is 480x640, so the larger size is also the more representative one.
+    cropped = _crop_via_detect(
+        [_box(0.1, 0.2, 0.2, 0.3), _box(0.5, 0.6, 0.1, 0.2)], image=_jpeg(800, 400)
+    )
+    assert _size(cropped) == (400, 240)
 
 
 def test_crop_applies_the_margin_on_all_four_sides():
@@ -251,11 +258,51 @@ def test_crop_is_scale_free_so_it_survives_an_roi_crop():
     onnx_v1 may letterbox an ROI-cropped region but always reports full-frame
     normalized coords, so _crop must not assume any particular pixel size.
     """
+    # Both sizes chosen so MIN_CROP_PX does not engage: at 200x100 the crop height
+    # would be 50 and get widened to 64, which is right but is not the proportionality
+    # this test is checking.
     boxes = [_box(0.25, 0.25, 0.5, 0.5)]
-    small = _size(_crop_via_detect(boxes, image=_jpeg(200, 100)))
-    large = _size(_crop_via_detect(boxes, image=_jpeg(400, 200)))
-    assert small == (100, 50)
-    assert large == (200, 100)
+    small = _size(_crop_via_detect(boxes, image=_jpeg(400, 200)))
+    large = _size(_crop_via_detect(boxes, image=_jpeg(800, 400)))
+    assert small == (200, 100)
+    assert large == (400, 200)
+
+
+def test_a_thin_detection_is_widened_to_a_usable_crop():
+    """A crop smaller than a vision encoder's patch factor CRASHES the model.
+
+    Measured against qwen2.5vl:3b over the 340 labelled frames: 88 calls -- every one
+    of them a cropped frame -- killed the model runner with
+    "height:12 or width:38 must be larger than factor:28". The old guard only rejected
+    a zero-or-negative area, so a detector box a dozen pixels tall went straight
+    through. The detector produces such boxes routinely on a 480x640 frame.
+    """
+    # A 480x640 frame with a 2%-tall, 8%-wide box: 38x12 px, exactly the shape that
+    # panicked the runner.
+    cropped = _crop_via_detect([_box(0.4, 0.5, 0.08, 0.02)], image=_jpeg(480, 640))
+    w, h = _size(cropped)
+    assert w >= MIN_CROP_PX and h >= MIN_CROP_PX, f"crop {w}x{h} is below the floor"
+
+
+def test_widening_keeps_the_crop_inside_the_frame():
+    """Growing a crop at the edge must move the window, not overflow the image."""
+    for x, y in ((0.0, 0.0), (0.99, 0.99)):
+        cropped = _crop_via_detect([_box(x, y, 0.01, 0.01)], image=_jpeg(480, 640))
+        w, h = _size(cropped)
+        assert MIN_CROP_PX <= w <= 480
+        assert MIN_CROP_PX <= h <= 640
+
+
+def test_widening_leaves_an_already_large_crop_alone():
+    """The floor is a floor, not a resize: a big crop must not be touched."""
+    cropped = _crop_via_detect([_box(0.25, 0.25, 0.5, 0.5)], image=_jpeg(480, 640))
+    assert _size(cropped) == (240, 320)
+
+
+def test_an_image_smaller_than_the_floor_falls_back_to_the_full_frame():
+    """No frame in this corpus is this small, but the crop must not invent pixels."""
+    image = _jpeg(40, 40)
+    assert _crop_via_detect([_box(0.4, 0.4, 0.1, 0.1)], image=image) == image
 
 
 def test_no_boxes_sends_the_full_frame():

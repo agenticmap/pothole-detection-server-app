@@ -29,6 +29,47 @@ logger = logging.getLogger(__name__)
 
 VERSION = "detection.hybrid_v1"
 
+# The smallest side a crop may have before it is sent to a vision model.
+#
+# 64 rather than the 28 that qwen2.5vl actually demands: patch factors vary by model
+# (14, 16 and 28 are all in the wild) and a crop that merely scrapes past one model's
+# minimum is a crop that breaks on the next. 64px is still a tight crop on a 480x640
+# frame -- 1.7% of its area -- and comfortably above every factor in use.
+MIN_CROP_PX = 64
+
+
+def _min_size(
+    box: tuple[int, int, int, int], size: tuple[int, int]
+) -> tuple[int, int, int, int] | None:
+    """Grow a crop box until both sides reach MIN_CROP_PX, or give up.
+
+    Grows around the box's own centre rather than falling back to the whole frame:
+    the crop exists precisely so the VLM sees the defect instead of the sky, and a
+    slightly wider crop keeps that while adding useful context. Returns None only when
+    the SOURCE IMAGE is itself too small, which no frame in this corpus is -- the
+    caller then sends the full frame, which is always valid.
+    """
+    width, height = size
+    if width < MIN_CROP_PX or height < MIN_CROP_PX:
+        return None
+
+    def widen(lo: int, hi: int, limit: int) -> tuple[int, int]:
+        if hi - lo >= MIN_CROP_PX:
+            return lo, hi
+        centre = (lo + hi) / 2
+        lo2 = int(round(centre - MIN_CROP_PX / 2))
+        hi2 = lo2 + MIN_CROP_PX
+        # Clamping has to move the window, not shrink it, or growing it was pointless.
+        if lo2 < 0:
+            return 0, MIN_CROP_PX
+        if hi2 > limit:
+            return limit - MIN_CROP_PX, limit
+        return lo2, hi2
+
+    x1, x2 = widen(box[0], box[2], width)
+    y1, y2 = widen(box[1], box[3], height)
+    return x1, y1, x2, y2
+
 
 class HybridDetector:
     version = VERSION
@@ -145,6 +186,16 @@ class HybridDetector:
                 int(min(h, y2 + my)),
             )
             if box[2] <= box[0] or box[3] <= box[1]:
+                return jpeg
+            # A non-empty crop is not the same as a USABLE one. Measured against
+            # qwen2.5vl:3b over the 340 labelled frames, 88 calls -- every one of them
+            # a cropped frame -- crashed the model runner outright with
+            # "height:12 or width:38 must be larger than factor:28". A vision encoder
+            # works in patches and rejects an image smaller than one patch; 28 for
+            # that model, 14 or 16 for others. The detector legitimately produces
+            # boxes a dozen pixels tall on a 480x640 frame, and nothing here checked.
+            box = _min_size(box, img.size)
+            if box is None:
                 return jpeg
             buf = io.BytesIO()
             img.crop(box).save(buf, format="JPEG")
