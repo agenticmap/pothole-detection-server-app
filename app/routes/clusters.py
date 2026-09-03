@@ -36,7 +36,12 @@ from fastapi.responses import FileResponse
 
 from app.config import settings
 from app.dependencies import DbPool, StaffOrAboveLive, ViewerOrAbove
-from app.models.clusters import ClusterDetailResponse, RepairRequest, RepairResponse
+from app.models.clusters import (
+    ClusterDetailResponse,
+    FrameDetailResponse,
+    RepairRequest,
+    RepairResponse,
+)
 from app.models.stats import ClusterStatsResponse
 
 # Reused rather than re-derived: it already rejects malformed and out-of-range
@@ -45,6 +50,7 @@ from app.routes.potholes import _parse_bbox
 from app.services.cluster_detail_service import (
     MAX_FRAMES,
     get_cluster_detail,
+    get_frame_detail,
     get_frame_storage_url,
 )
 from app.services.cluster_stats_service import MAX_TIERS, StatsFilter, get_cluster_stats
@@ -128,6 +134,33 @@ async def get_cluster(
     if detail is None:
         raise HTTPException(status_code=404, detail="No such cluster.")
     return detail
+
+
+@router.get("/frames/{client_id}", response_model=FrameDetailResponse)
+async def get_frame(
+    pool: DbPool,
+    staff: ViewerOrAbove,
+    client_id: str = Path(..., description="asset_frame.client_id"),
+):
+    """One frame's evidence: both detectors' boxes, the scores, and the pairing.
+
+    Exists because the frames TILE carries `server_box_count` but not the boxes --
+    frame-relative geometry is meaningless in map space, so the tile cannot carry it.
+    Opening a frame from the map therefore needs one round trip.
+
+    Serves unpaired frames too. The map's frames layer includes them deliberately, and
+    they are often the interesting ones: a frame the detector scored highly that matched
+    no sensor event contributed to no cluster, which is a fact about the pipeline rather
+    than about the road.
+
+    Same tier as the tile and the image, so this exposes nothing a caller could not
+    already reach -- and, like every other frame surface, it returns neither `jpeg_url`
+    nor `device_id`.
+    """
+    frame = await get_frame_detail(pool, client_id)
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No such frame.")
+    return frame
 
 
 @router.get("/frames/{client_id}/image", response_class=FileResponse)

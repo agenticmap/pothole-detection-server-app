@@ -40,6 +40,7 @@ from app.models.clusters import (
     ClusterDetailResponse,
     ClusterFrameItem,
     ClusterMemberItem,
+    FrameDetailResponse,
     RepairLogItem,
 )
 from app.services.detection_boxes import parse_detection_boxes, parse_vlm_verdict
@@ -270,3 +271,73 @@ async def get_frame_storage_url(pool: asyncpg.Pool, *, client_id: str) -> str | 
     """
     async with pool.acquire() as conn:
         return await conn.fetchval(_FRAME_STORAGE_SQL, client_id)
+
+
+# ── One frame, on its own ─────────────────────────────────────────────────────
+#
+# Same anonymity rule as _FRAMES_SQL: jpeg_url and device_id are deliberately not
+# selected, because the stored path embeds device_id.
+#
+# LEFT JOIN, not JOIN. The map's frames layer includes frames that never paired --
+# that is what `frameStatus`'s "scored but unpaired" case reports, and 98.6% of
+# pothole-classed observations have no coincident frame at all. An inner join here
+# would 404 exactly the frames an operator is most likely to be curious about.
+#
+# DISTINCT ON because a frame can pair with more than one observation; the primary
+# pair wins, matching _FRAMES_SQL's ordering so the two surfaces agree about which
+# pairing a frame "has".
+_FRAME_DETAIL_SQL = """
+SELECT DISTINCT ON (f.client_id)
+    f.client_id,
+    ST_Y(f.geom::geometry) AS lat,
+    ST_X(f.geom::geometry) AS lon,
+    f.ts_utc,
+    f.device_probability,
+    f.server_probability,
+    f.server_model_id,
+    f.detected_at,
+    f.server_detections,
+    f.device_detections,
+    fp.event_client_id AS paired_observation_id,
+    fp.fused_confidence,
+    fp.delta_ms,
+    fp.delta_m
+FROM asset_frame f
+LEFT JOIN fusion_pair fp ON fp.frame_client_id = f.client_id
+WHERE f.client_id = $1
+ORDER BY f.client_id, fp.is_primary DESC NULLS LAST, fp.fused_confidence DESC NULLS LAST
+"""
+
+
+async def get_frame_detail(pool: asyncpg.Pool, client_id: str) -> FrameDetailResponse | None:
+    """One frame's full evidence, or None if there is no such frame.
+
+    Serves the map: the frames tile carries `server_box_count` but not the boxes, because
+    frame-relative geometry is meaningless in map space, so the viewer needs a round trip
+    to draw anything.
+    """
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(_FRAME_DETAIL_SQL, client_id)
+    if row is None:
+        return None
+
+    return FrameDetailResponse(
+        client_id=row["client_id"],
+        lat=row["lat"],
+        lon=row["lon"],
+        ts=_iso(row["ts_utc"]),
+        image_url=f"/api/v1/frames/{row['client_id']}/image",
+        device_probability=row["device_probability"],
+        server_probability=row["server_probability"],
+        server_model_id=row["server_model_id"],
+        detected_at=_iso(row["detected_at"]),
+        paired_observation_id=row["paired_observation_id"],
+        fused_confidence=row["fused_confidence"],
+        delta_ms=row["delta_ms"],
+        delta_m=row["delta_m"],
+        # Parsed, not passed through: server_detections also carries the hybrid backend's
+        # {"_vlm_verdict": ...} element, which has no bbox and would reach a box renderer.
+        server_boxes=parse_detection_boxes(row["server_detections"]),
+        device_boxes=parse_detection_boxes(row["device_detections"]),
+        vlm_verdict=parse_vlm_verdict(row["server_detections"]),
+    )

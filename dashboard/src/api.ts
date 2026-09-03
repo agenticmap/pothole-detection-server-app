@@ -7,7 +7,7 @@
  */
 
 import { AuthError, getAccessToken, readError, refreshNow } from './auth.ts';
-import type { ClusterDetailResponse, RepairResponse } from './types.ts';
+import type { ClusterDetailResponse, FrameDetail, RepairResponse } from './types.ts';
 
 export class ApiError extends Error {
   constructor(
@@ -72,6 +72,20 @@ export async function setRepaired(
 export async function getFrameObjectUrl(imageUrl: string, signal?: AbortSignal): Promise<string> {
   const res = await request(imageUrl, { signal });
   return URL.createObjectURL(await res.blob());
+}
+
+
+/**
+ * One frame's full evidence, for opening it from the map.
+ *
+ * The frames tile carries `server_box_count` but not the boxes -- frame-relative
+ * geometry is meaningless in map space -- so the viewer needs this round trip. Serves
+ * unpaired frames too, which is why the response is FrameDetail and not
+ * ClusterFrameItem: that model requires a paired observation.
+ */
+export async function getFrameDetail(clientId: string, signal?: AbortSignal): Promise<FrameDetail> {
+  const res = await request(`/api/v1/frames/${encodeURIComponent(clientId)}`, { signal });
+  return (await res.json()) as FrameDetail;
 }
 
 export { AuthError };

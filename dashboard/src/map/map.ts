@@ -16,6 +16,7 @@ import {
 import './worker.ts';
 import { basemapStyle } from './basemap.ts';
 import { frameFacts, frameStatus } from './frame-facts.ts';
+import { framePreviewUrl, IDLE, type PreviewState, reducePreview } from './frame-preview.ts';
 import {
   BASE_INDIVIDUAL_FILTER,
   FRAMES_MAX_ZOOM,
@@ -40,6 +41,7 @@ import { registerMarkerIcons } from './marker-icons.ts';
 import { installTileAuthRecovery, refreshTokenCache, transformRequest } from './tile-auth.ts';
 import { SEVERITY_TIERS, UNRATED_LABEL, severityLabel } from '../severity.ts';
 import { cssVar } from '../tokens.ts';
+import { getFrameObjectUrl } from '../api.ts';
 import { el } from '../dom.ts';
 import type { ExpressionSpecification, FilterSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { currentTheme, type Theme } from '../theme.ts';
@@ -80,6 +82,12 @@ export interface PotholeMapOptions {
   onError: (message: string) => void;
   /** Feature under the pointer, or null when it leaves. Drives the dock readout. */
   onHover?: (feature: Record<string, unknown> | null) => void;
+  /**
+   * Open a frame at full size. The map cannot do this itself: the tile carries
+   * `server_box_count` but not the boxes, so the viewer needs a round trip through
+   * GET /api/v1/frames/{client_id}, and the viewer instance is shared with the panel.
+   */
+  onOpenFrame?: (clientId: string) => void;
 }
 
 export class PotholeMap {
@@ -105,6 +113,21 @@ export class PotholeMap {
     maxWidth: '320px',
     className: 'observation-popup',
   });
+  /**
+   * A SEPARATE popup for camera frames, because this one owns an in-flight image
+   * fetch and an object URL. Sharing the observation popup would mean an observation
+   * click silently discarding a frame's request and leaking its blob, with nothing
+   * to hang the abort on.
+   */
+  private readonly framePopup = new Popup({
+    closeButton: true,
+    closeOnClick: true,
+    maxWidth: '360px',
+    className: 'observation-popup frame-popup',
+  });
+  private previewState: PreviewState = IDLE;
+  private previewController: AbortController | null = null;
+  private previewObjectUrl: string | null = null;
 
   constructor(private readonly options: PotholeMapOptions) {
     this.assetType = options.assetType;
@@ -183,10 +206,23 @@ export class PotholeMap {
     this.map.on('click', LAYER_FRAMES, (e: MapLayerMouseEvent) => {
       const feature = e.features?.[0];
       if (!feature) return;
-      this.observationPopup
-        .setLngLat(e.lngLat)
-        .setDOMContent(framePopupContent(feature.properties ?? {}))
-        .addTo(this.map);
+      const props = feature.properties ?? {};
+      const node = framePopupContent(props, {
+        onOpenFullSize: (id) => this.options.onOpenFrame?.(id),
+      });
+      this.framePopup.setLngLat(e.lngLat).setDOMContent(node).addTo(this.map);
+      void this.loadPreview(props, node);
+    });
+
+    // Abort and revoke here rather than at each call site: `close` fires for the ✕,
+    // for closeOnClick, and for a programmatic close alike, so this is the one place
+    // that cannot be forgotten. Without it a closed popup leaves a fetch running and
+    // an object URL alive for the rest of the session.
+    this.framePopup.on('close', () => {
+      this.previewController?.abort();
+      this.previewController = null;
+      this.revokePreview();
+      this.previewState = reducePreview(this.previewState, { type: 'closed' });
     });
 
     this.map.on('mouseenter', LAYER_FRAMES, () => {
@@ -348,6 +384,58 @@ export class PotholeMap {
     this.map.once('styledata', () => {
       if (!this.map.getSource(SOURCE_ID)) this.addClusterLayers();
     });
+  }
+
+  // ── Frame preview ───────────────────────────────────────────────────────────
+
+  private revokePreview(): void {
+    if (this.previewObjectUrl) {
+      URL.revokeObjectURL(this.previewObjectUrl);
+      this.previewObjectUrl = null;
+    }
+  }
+
+  /**
+   * Fetch the frame's JPEG into the open popup.
+   *
+   * Object-URL policy follows panel/frames.ts rather than review/images.ts: revoke
+   * once decoded, keep no registry, and let the endpoint's
+   * `private, max-age=86400, immutable` make a re-click a cache hit. One popup at a
+   * time means concurrency is 1 by construction, which matters because the image
+   * route is behind a Semaphore(6) shared across every user.
+   */
+  private async loadPreview(props: Record<string, unknown>, node: HTMLElement): Promise<void> {
+    const url = framePreviewUrl(props['client_id']);
+    const img = node.querySelector<HTMLImageElement>('.frame-popup-img');
+    if (!url || !img) return;
+
+    const clientId = String(props['client_id']);
+    this.previewController?.abort();
+    this.revokePreview();
+    const controller = new AbortController();
+    this.previewController = controller;
+    this.previewState = reducePreview(this.previewState, { type: 'open', clientId });
+
+    try {
+      const objectUrl = await getFrameObjectUrl(url, controller.signal);
+      // The reducer drops a load for a frame that is no longer showing, which is the
+      // click-A-then-B race: one popup is reused, so without this A's photograph
+      // appears over B's marker.
+      const next = reducePreview(this.previewState, { type: 'loaded', clientId });
+      if (next === this.previewState) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
+      this.previewState = next;
+      this.previewObjectUrl = objectUrl;
+      img.src = objectUrl;
+      await img.decode().catch(() => {});
+      node.classList.add('is-loaded');
+    } catch {
+      if (controller.signal.aborted) return;
+      this.previewState = reducePreview(this.previewState, { type: 'failed', clientId });
+      node.classList.add('is-failed');
+    }
   }
 
   /** Current viewport as a lon/lat bbox, for the stats query. */
@@ -625,7 +713,10 @@ function observationPopupContent(props: Record<string, unknown>): HTMLElement {
  * observation. A frame scoring 0.9 that paired with nothing contributed nothing
  * to any cluster, and no arrangement of the score alone says so.
  */
-function framePopupContent(props: Record<string, unknown>): HTMLElement {
+function framePopupContent(
+  props: Record<string, unknown>,
+  opts: { onOpenFullSize?: (clientId: string) => void } = {},
+): HTMLElement {
   const status = frameStatus(props);
 
   const dl = el('dl', { class: 'observation-popup-grid' });
@@ -633,13 +724,40 @@ function framePopupContent(props: Record<string, unknown>): HTMLElement {
     dl.append(el('dt', { text: term }), el('dd', { text: value }));
   }
 
+  // The box is reserved BEFORE the fetch. The popup sizes and positions itself when
+  // its content is set, so an unsized <img> renders a tiny popup that then shoves
+  // itself across the map when the blob decodes.
+  const clientId = props['client_id'];
+  const preview =
+    typeof clientId === 'string' && clientId
+      ? el('div', { class: 'frame-popup-preview' }, [
+          el('img', { class: 'frame-popup-img', alt: 'Camera frame', loading: 'eager' }),
+        ])
+      : null;
+
+  const openFull =
+    preview && opts.onOpenFullSize
+      ? el('button', {
+          class: 'button button-secondary frame-popup-open',
+          type: 'button',
+          text: 'Open full size',
+        })
+      : null;
+  if (openFull && typeof clientId === 'string') {
+    // The tile carries server_box_count but not the boxes -- frame-relative geometry
+    // is meaningless in map space -- so the viewer needs a round trip for those.
+    openFull.addEventListener('click', () => opts.onOpenFullSize?.(clientId));
+  }
+
   return el('div', {}, [
     el('h3', { class: 'observation-popup-title', text: 'Camera frame' }),
+    preview,
     el('p', {
       class: status.severe ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
       text: status.text,
     }),
     dl,
+    openFull,
     el('p', {
       class: 'observation-popup-id',
       text: String(props['client_id'] ?? 'unknown id'),

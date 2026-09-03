@@ -17,6 +17,15 @@ class ClusterStatsResponse(BaseModel):
     open: int = Field(description="Unrepaired clusters in the viewport.")
     repaired: int = Field(description="Repaired clusters in the viewport.")
     unrated: int = Field(description="Open clusters with no severity score yet.")
+    corroborated: int = Field(
+        default=0,
+        description=(
+            "Open clusters that meet the PUBLICATION rule -- seen by enough distinct "
+            "devices or on enough distinct passes to be served by /api/v1/potholes. "
+            "Forming a cluster needs one reading; being publishable needs corroboration, "
+            "and the console showed only the first number."
+        ),
+    )
     mean_confidence: float | None = Field(
         default=None, description="Mean fused confidence across open clusters; null if none."
     )

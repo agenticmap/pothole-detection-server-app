@@ -15,6 +15,12 @@ export interface ClusterStats {
   open: number;
   repaired: number;
   unrated: number;
+  /**
+   * Open clusters meeting the PUBLICATION rule -- enough distinct devices or passes
+   * to be served by /api/v1/potholes. Computed server-side from the same predicate
+   * the public read path uses, so the console and the API cannot disagree.
+   */
+  corroborated: number;
   mean_confidence: number | null;
   repaired_last_30d: number;
   /** Open clusters per tier, positionally parallel to SEVERITY_TIERS. */

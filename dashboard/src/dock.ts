@@ -335,6 +335,16 @@ export class Dock {
     const kpis: Array<{ value: string; label: string }> = [
       { value: s ? String(s.open) : '—', label: 'Open defects in view' },
       {
+        // "Open" counts clusters; this counts the ones the PUBLIC api would serve.
+        // Forming a cluster takes one reading (cluster_min_points = 1); being
+        // publishable takes corroboration -- two devices or three passes. The console
+        // showed only the first number, so it reported N defects while /potholes
+        // would have served none of them. Shown as a ratio because the gap IS the
+        // information: 0 of 204 says something 0 alone does not.
+        value: s ? `${s.corroborated} of ${s.open}` : '—',
+        label: 'Corroborated',
+      },
+      {
         // Percentages of a tiny denominator mislead, so below 10 open clusters the
         // share is withheld rather than rounded into false confidence.
         value: s && s.open >= 10 ? `${Math.round((severe / s.open) * 100)}%` : '—',

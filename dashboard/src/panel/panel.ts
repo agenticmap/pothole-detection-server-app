@@ -39,18 +39,21 @@ export class DetailPanel {
   private controller: AbortController | null = null;
   private current: ClusterDetailResponse | null = null;
   /**
-   * One dialog for the panel's lifetime, opened with copies of the frame list.
-   *
-   * Built once rather than per open because a `<dialog>` in the top layer is cheap to
-   * keep and expensive to get wrong: creating one per click would leak an element on
-   * every thumbnail press.
+   * Injected rather than owned. The map opens frames too, and two FrameViewers
+   * would mean two <dialog>s on document.body -- both able to be open at once,
+   * each inerting the other's document. One instance, constructed in main.ts.
    */
-  private readonly viewer = new FrameViewer();
+  private readonly viewer: FrameViewer;
+  private readonly ownsViewer: boolean;
 
   constructor(
     container: HTMLElement,
     private readonly callbacks: PanelCallbacks,
+    viewer?: FrameViewer,
   ) {
+    // Optional so existing tests and any call site that does not care keep working.
+    this.ownsViewer = viewer === undefined;
+    this.viewer = viewer ?? new FrameViewer();
     this.root = el('aside', {
       class: 'panel',
       hidden: 'hidden',
@@ -93,7 +96,9 @@ export class DetailPanel {
   /** Release the dialog. Sign-out and session expiry both route through here. */
   destroy(): void {
     this.close();
-    this.viewer.destroy();
+    // Only destroy a viewer this panel created. A shared one belongs to main.ts,
+    // which tears it down alongside the map.
+    if (this.ownsViewer) this.viewer.destroy();
   }
 
   /**

@@ -22,6 +22,8 @@ from datetime import UTC, datetime
 
 import asyncpg
 
+from app.config import settings
+
 # Repaired-recently window. Fixed rather than configurable: it is a label on a
 # card ("Repaired this month"), not a tuning knob, and a mismatch between the two
 # would be a lie rather than a preference.
@@ -59,7 +61,8 @@ WITH bounds AS (
     ) AS env
 ),
 visible AS (
-    SELECT c.cluster_id, c.severity, c.confidence, c.repaired_at, c.source
+    SELECT c.cluster_id, c.severity, c.confidence, c.repaired_at, c.source,
+           c.distinct_devices, c.distinct_passes
     FROM asset_cluster c, bounds b
     WHERE c.asset_type = $5
       AND ST_Transform(c.centroid::geometry, 3857) && b.env
@@ -69,6 +72,14 @@ SELECT
     count(*) FILTER (WHERE repaired_at IS NULL)                       AS open,
     count(*) FILTER (WHERE repaired_at IS NOT NULL)                   AS repaired,
     count(*) FILTER (WHERE repaired_at IS NULL AND severity IS NULL)  AS unrated,
+    -- Corroborated: the SAME predicate the public read path applies
+    -- (cluster_query_service._FILTER). The console had no way to show this, so it
+    -- reported N open defects while the public API would have served none of them --
+    -- every cluster in the collected corpus is one drive-past. Computed here rather
+    -- than client-side so the two surfaces cannot drift about what counts.
+    count(*) FILTER (
+        WHERE repaired_at IS NULL AND (distinct_devices >= $9 OR distinct_passes >= $10)
+    )                                                                 AS corroborated,
     avg(confidence) FILTER (WHERE repaired_at IS NULL)                AS mean_confidence,
     (
         SELECT count(DISTINCT r.cluster_id)
@@ -124,6 +135,8 @@ async def get_cluster_stats(pool: asyncpg.Pool, f: StatsFilter) -> dict:
         f.window_days,
         list(f.tiers),
         REPAIRED_WINDOW_DAYS,
+        settings.cluster_min_distinct_devices,
+        settings.cluster_min_distinct_passes,
     )
 
     # A bbox containing nothing still returns a row (the aggregates are over an
@@ -134,6 +147,7 @@ async def get_cluster_stats(pool: asyncpg.Pool, f: StatsFilter) -> dict:
             "open": 0,
             "repaired": 0,
             "unrated": 0,
+            "corroborated": 0,
             "mean_confidence": None,
             "repaired_last_30d": 0,
             "tier_counts": counts,
@@ -145,6 +159,7 @@ async def get_cluster_stats(pool: asyncpg.Pool, f: StatsFilter) -> dict:
         "open": row["open"],
         "repaired": row["repaired"],
         "unrated": row["unrated"],
+        "corroborated": row["corroborated"],
         "mean_confidence": row["mean_confidence"],
         "repaired_last_30d": row["repaired_recently"],
         "tier_counts": list(row["tier_counts"] or []),

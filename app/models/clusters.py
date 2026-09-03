@@ -120,6 +120,56 @@ class ClusterFrameItem(BaseModel):
     )
 
 
+class FrameDetailResponse(BaseModel):
+    """GET /api/v1/frames/{client_id} — one frame, whether or not it ever paired.
+
+    Nearly ClusterFrameItem, and deliberately NOT that model. ClusterFrameItem describes
+    a frame reached *through* a cluster, so its `paired_observation_id` is required --
+    every frame in that list paired with a member by definition. This endpoint serves the
+    map, whose frames layer includes UNPAIRED frames on purpose: `frameStatus` in the
+    dashboard exists precisely to report "scored but unpaired -- it reached no cluster",
+    and 98.6% of pothole-classed observations have no coincident frame at all. Reusing
+    ClusterFrameItem would have meant either lying with a placeholder id or widening a
+    field that is genuinely required in its own context.
+
+    Same anonymity rule as ClusterFrameItem, and for the same reason: no `jpeg_url` and
+    no `device_id`. The stored path is "{device_id}/{client_id}.jpg", so one field would
+    leak the device. `image_url` is the authenticated API path instead.
+    """
+
+    client_id: str
+    lat: float = Field(..., ge=-90.0, le=90.0)
+    lon: float = Field(..., ge=-180.0, le=180.0)
+    ts: str | None = Field(default=None, description="ISO-8601 timestamp.")
+    image_url: str = Field(..., description="Authenticated API path; NOT a storage path.")
+    device_probability: float | None = None
+    server_probability: float | None = None
+    server_model_id: str | None = None
+    detected_at: str | None = Field(
+        default=None,
+        description="When server-side detection scored this frame; null means not yet scored, "
+        "which is distinct from a score of 0.",
+    )
+    # Nullable, unlike ClusterFrameItem's. This is the whole reason for a separate model.
+    paired_observation_id: str | None = Field(
+        default=None,
+        description="The observation this frame paired with, or null if it never paired.",
+    )
+    fused_confidence: float | None = None
+    delta_ms: int | None = Field(default=None, description="Time offset from the paired event.")
+    delta_m: float | None = Field(default=None, description="Distance from the paired event.")
+    server_boxes: list[DetectionBox] = Field(
+        default_factory=list,
+        description="Server detector boxes. Normalized 0..1, corner-origin, full-frame.",
+    )
+    device_boxes: list[DetectionBox] = Field(
+        default_factory=list, description="On-device detector boxes. Same convention."
+    )
+    vlm_verdict: VlmVerdictItem | None = Field(
+        default=None, description="Present only when the hybrid backend verified this frame."
+    )
+
+
 # ── Repair history ────────────────────────────────────────────────────────────
 
 

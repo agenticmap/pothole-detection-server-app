@@ -72,6 +72,21 @@ export interface ClusterFrameItem {
   vlm_verdict: VlmVerdict | null;
 }
 
+/**
+ * One frame on its own — GET /api/v1/frames/{client_id}.
+ *
+ * Mirrors app/models/clusters.py::FrameDetailResponse. Nearly ClusterFrameItem, with
+ * `paired_observation_id` NULLABLE: the map's frames layer includes frames that never
+ * paired, and those are often the interesting ones — a frame the detector scored highly
+ * that matched no sensor event contributed to no cluster.
+ *
+ * Satisfies `FrameEvidence` structurally, so it works with the existing scoreLines /
+ * overlayBoxesFor / vlmSummary helpers unchanged.
+ */
+export interface FrameDetail extends Omit<ClusterFrameItem, 'paired_observation_id'> {
+  paired_observation_id: string | null;
+}
+
 export interface RepairLogItem {
   repair_id: string;
   action: 'repaired' | 'unrepaired' | string;

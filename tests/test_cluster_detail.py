@@ -6,6 +6,7 @@ is almost always NULL, so frames have to be reached through fusion_pair. Several
 tests below exist specifically to fail if someone "simplifies" that.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -308,3 +309,82 @@ class TestFrameImage:
         """Better a 422 than silently serving full-size to a client expecting a thumb."""
         resp = await client.get("/api/v1/frames/frm-0/image?size=thumb", headers=auth())
         assert resp.status_code == 422
+
+
+class TestFrameDetail:
+    """GET /api/v1/frames/{client_id} — one frame, paired or not.
+
+    Exists because the frames TILE carries server_box_count but not the boxes, so
+    opening a frame from the map needs a round trip.
+    """
+
+    async def test_unauthenticated_is_401(self, client, db_pool):
+        assert (await client.get("/api/v1/frames/anything")).status_code == 401
+
+    async def test_unknown_frame_is_404(self, client, db_pool):
+        resp = await client.get("/api/v1/frames/no-such-frame", headers=auth())
+        assert resp.status_code == 404
+
+    async def test_an_unpaired_frame_is_served(self, client, db_pool):
+        """THE CASE ClusterFrameItem COULD NOT EXPRESS.
+
+        Its paired_observation_id is required, but the map's frames layer includes
+        unpaired frames deliberately — a frame the detector scored that matched no
+        sensor event reached no cluster, which is a fact about the pipeline worth
+        being able to open. That is why this endpoint has its own model.
+        """
+        async with db_pool.acquire() as conn:
+            await insert_frame(conn, "frm-lonely", device_probability=0.71)
+
+        body = (await client.get("/api/v1/frames/frm-lonely", headers=auth())).json()
+        assert body["client_id"] == "frm-lonely"
+        assert body["paired_observation_id"] is None
+        assert body["fused_confidence"] is None
+        assert body["device_probability"] == pytest.approx(0.71)
+
+    async def test_a_paired_frame_carries_its_pairing(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await insert_observation(conn, "obs-p")
+            await insert_frame(conn, "frm-paired")
+            await _pair(conn, "obs-p", "frm-paired", fused=0.83, delta_ms=250, delta_m=3.0)
+
+        body = (await client.get("/api/v1/frames/frm-paired", headers=auth())).json()
+        assert body["paired_observation_id"] == "obs-p"
+        assert body["fused_confidence"] == pytest.approx(0.83)
+        assert body["delta_ms"] == 250
+
+    async def test_it_leaks_neither_device_id_nor_the_storage_path(self, client, db_pool):
+        """The stored path is "{device_id}/{client_id}.jpg", so one field would leak
+        the device. Asserted on the serialized body rather than trusted from the query."""
+        async with db_pool.acquire() as conn:
+            await insert_frame(conn, "frm-priv", device_id="dev-secret",
+                               jpeg_url="dev-secret/frm-priv.jpg")
+
+        resp = await client.get("/api/v1/frames/frm-priv", headers=auth())
+        raw = resp.text
+        assert "dev-secret" not in raw
+        assert "jpeg_url" not in resp.json()
+        # ...and the authenticated path is what is offered instead.
+        assert resp.json()["image_url"] == "/api/v1/frames/frm-priv/image"
+
+    async def test_boxes_are_parsed_and_the_vlm_verdict_is_lifted_out(self, client, db_pool):
+        """server_detections carries the hybrid backend's {"_vlm_verdict": ...} element,
+        which has no bbox and must not reach a box renderer."""
+        detections = json.dumps([
+            {"bbox": {"x": 0.1, "y": 0.2, "w": 0.3, "h": 0.4}, "confidence": 0.7,
+             "label": "pothole", "class_id": 0},
+            {"_vlm_verdict": {"is_pothole": True, "confidence": 0.9, "severity": "deep",
+                              "rationale": "a bowl-shaped cavity", "model_id": "qwen"}},
+        ])
+        async with db_pool.acquire() as conn:
+            await insert_frame(conn, "frm-boxes")
+            await conn.execute(
+                "UPDATE asset_frame SET server_detections = $2::jsonb, detected_at = now() "
+                "WHERE client_id = $1", "frm-boxes", detections,
+            )
+
+        body = (await client.get("/api/v1/frames/frm-boxes", headers=auth())).json()
+        assert len(body["server_boxes"]) == 1            # the verdict is NOT a box
+        assert body["server_boxes"][0]["confidence"] == pytest.approx(0.7)
+        assert body["vlm_verdict"]["is_pothole"] is True
+        assert body["detected_at"] is not None

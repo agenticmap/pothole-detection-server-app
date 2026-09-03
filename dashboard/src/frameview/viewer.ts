@@ -29,7 +29,7 @@
 import { getFrameObjectUrl } from '../api.ts';
 import { clear, el, formatDateTime, formatNumber } from '../dom.ts';
 import { FrameStage } from '../review/overlay.ts';
-import type { ClusterFrameItem } from '../types.ts';
+import type { FrameDetail } from '../types.ts';
 import {
   type BoxVisibility,
   notScoredNote,
@@ -39,8 +39,15 @@ import {
 } from './evidence.ts';
 
 export interface OpenOptions {
-  /** The list to page through. Copied, not held by reference. */
-  frames: readonly ClusterFrameItem[];
+  /**
+   * The list to page through. Copied, not held by reference.
+   *
+   * Typed as FrameDetail, the WIDER of the two shapes: its
+   * `paired_observation_id` is nullable, so a ClusterFrameItem (which always has
+   * one) is assignable here but not the reverse. That is what lets the map open an
+   * unpaired frame through the same viewer the panel uses.
+   */
+  frames: readonly FrameDetail[];
   index: number;
   /** Focus returns here on close, if it is still in the document. */
   trigger: HTMLElement | null;
@@ -56,7 +63,7 @@ export class FrameViewer {
   private readonly rail = el('div', { class: 'frame-dialog-rail' });
   private readonly footer = el('footer', { class: 'frame-dialog-footer' });
 
-  private frames: ClusterFrameItem[] = [];
+  private frames: FrameDetail[] = [];
   private index = 0;
   private trigger: HTMLElement | null = null;
   private controller: AbortController | null = null;
@@ -127,7 +134,7 @@ export class FrameViewer {
     }
   }
 
-  private current(): ClusterFrameItem | null {
+  private current(): FrameDetail | null {
     return this.frames[this.index] ?? null;
   }
 
@@ -194,7 +201,7 @@ export class FrameViewer {
     return chip;
   }
 
-  private renderRail(frame: ClusterFrameItem): void {
+  private renderRail(frame: FrameDetail): void {
     clear(this.rail);
     // A turn is for looking at a frame that arrived sideways. View-only and reset on
     // every open -- 20 legacy frames were corrected at rest by
@@ -228,7 +235,7 @@ export class FrameViewer {
     if (vlm) this.rail.append(vlm);
   }
 
-  private detectionSection(frame: ClusterFrameItem): HTMLElement {
+  private detectionSection(frame: FrameDetail): HTMLElement {
     const section = el('section', { class: 'panel-section' }, [
       el('h3', { class: 'panel-section-title', text: 'Detection' }),
     ]);
@@ -255,7 +262,7 @@ export class FrameViewer {
   }
 
   /** The pairing story: on the wire since Phase 2.2d and never once rendered. */
-  private pairingSection(frame: ClusterFrameItem): HTMLElement {
+  private pairingSection(frame: FrameDetail): HTMLElement {
     return el('section', { class: 'panel-section' }, [
       el('h3', { class: 'panel-section-title', text: 'Pairing' }),
       el('dl', { class: 'frame-dialog-facts' }, [
@@ -272,7 +279,7 @@ export class FrameViewer {
     ]);
   }
 
-  private vlmSection(frame: ClusterFrameItem): HTMLElement | null {
+  private vlmSection(frame: FrameDetail): HTMLElement | null {
     const vlm = vlmSummary(frame.vlm_verdict);
     if (!vlm) return null;
     return el('section', { class: 'panel-section' }, [

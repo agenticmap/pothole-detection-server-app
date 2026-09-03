@@ -37,15 +37,20 @@ async def _insert_cluster(
     confidence=0.8,
     repaired=False,
     age_days=0,
+    # Corroboration, which forming a cluster does NOT require. Defaults keep every
+    # existing test's cluster publishable via the device rule.
+    distinct_devices=2,
+    distinct_passes=0,
 ):
     await conn.execute(
         """
         INSERT INTO asset_cluster (
             cluster_id, asset_type, centroid, severity, confidence,
-            observation_count, distinct_devices, last_seen, source, repaired_at
+            observation_count, distinct_devices, distinct_passes, last_seen, source,
+            repaired_at
         ) VALUES (
             $1, 'pothole', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
-            $4, $5, 3, 2, now() - make_interval(days => $6), 'crowd',
+            $4, $5, 3, $8, $9, now() - make_interval(days => $6), 'crowd',
             CASE WHEN $7 THEN now() ELSE NULL END
         )
         """,
@@ -56,6 +61,8 @@ async def _insert_cluster(
         confidence,
         age_days,
         repaired,
+        distinct_devices,
+        distinct_passes,
     )
 
 
@@ -280,3 +287,70 @@ class TestSourceCounts:
 
         body = (await client.get(stats_url(bbox=BBOX_ELSEWHERE), headers=auth())).json()
         assert body["source_counts"] == {}
+
+
+class TestCorroboration:
+    """The count that makes the console honest.
+
+    A cluster FORMS from one reading (cluster_min_points = 1). Being PUBLISHABLE
+    needs corroboration -- distinct_devices >= 2 OR distinct_passes >= 3, applied on
+    the read path only. The console showed the first number and called it "open
+    defects", which on the collected corpus meant reporting 204 defects while
+    /api/v1/potholes would have served none of them.
+    """
+
+    async def test_a_single_pass_cluster_is_open_but_not_corroborated(self, client, db_pool):
+        """The shape of every cluster in the real corpus: one device, one pass."""
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_lonely", distinct_devices=1, distinct_passes=1)
+
+        body = (await client.get(stats_url(), headers=auth())).json()
+        assert body["open"] == 1
+        assert body["corroborated"] == 0
+
+    async def test_two_devices_corroborate(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_two_dev", distinct_devices=2, distinct_passes=1)
+
+        body = (await client.get(stats_url(), headers=auth())).json()
+        assert body["corroborated"] == 1
+
+    async def test_three_passes_corroborate_on_one_device(self, client, db_pool):
+        """The paper's own validation was one phone on five days, which is why passes
+        are an alternative to devices rather than an extra requirement."""
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_three_pass", distinct_devices=1, distinct_passes=3)
+
+        body = (await client.get(stats_url(), headers=auth())).json()
+        assert body["corroborated"] == 1
+
+    async def test_a_repaired_cluster_is_not_counted(self, client, db_pool):
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_done", distinct_devices=2, repaired=True)
+
+        body = (await client.get(stats_url(), headers=auth())).json()
+        assert body["corroborated"] == 0
+
+    async def test_it_agrees_with_what_the_public_api_serves(self, client, db_pool):
+        """THE POINT OF COMPUTING IT SERVER-SIDE.
+
+        The console's count and /api/v1/potholes must apply the same rule, or the
+        dashboard says N and the mobile app says something else -- which has already
+        happened once with the device floor.
+        """
+        async with db_pool.acquire() as conn:
+            await _insert_cluster(conn, "clu_pub_a", distinct_devices=2, distinct_passes=1)
+            await _insert_cluster(conn, "clu_pub_b", distinct_devices=1, distinct_passes=3)
+            await _insert_cluster(conn, "clu_priv", distinct_devices=1, distinct_passes=1)
+
+        stats = (await client.get(stats_url(), headers=auth())).json()
+        public = (
+            await client.get(
+                f"/api/v1/potholes?bbox={BBOX_HERE}&zoom=16",
+                headers={"Accept-Version": "v1"},
+            )
+        ).json()
+
+        assert stats["open"] == 3
+        assert stats["corroborated"] == 2
+        assert len(public["items"]) == stats["corroborated"]

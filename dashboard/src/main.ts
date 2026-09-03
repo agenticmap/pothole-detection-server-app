@@ -12,6 +12,8 @@ import './organic-shell.css';
 import { AuthError, clearSession, currentSession, isLoggedIn, login, onSessionExpired } from './auth.ts';
 import { el } from './dom.ts';
 import { PotholeMap, type MapView } from './map/map.ts';
+import { getFrameDetail } from './api.ts';
+import { FrameViewer } from './frameview/viewer.ts';
 import { DetailPanel } from './panel/panel.ts';
 import {
   buildShell,
@@ -47,6 +49,8 @@ let map: PotholeMap | null = null;
 let panel: DetailPanel | null = null;
 let dock: Dock | null = null;
 let review: ReviewModule | null = null;
+/** Shared by the panel and the map — see where it is constructed. */
+let frameViewer: FrameViewer | null = null;
 /** Set by each render, so the session-expiry handler can release its resources. */
 let teardownApp: (() => void) | null = null;
 
@@ -126,6 +130,11 @@ function renderApp(): void {
     // the login screen replaces — so dropping the reference alone would leave the
     // viewer in the DOM across a sign-out.
     panel?.destroy();
+    // Owned here, not by the panel, so it is destroyed here. It lives on
+    // document.body, OUTSIDE the root the login screen replaces, so dropping the
+    // reference alone would leave a <dialog> in the DOM across a sign-out.
+    frameViewer?.destroy();
+    frameViewer = null;
     panel = null;
     dock = null;
     review = null;
@@ -212,6 +221,29 @@ function renderApp(): void {
     sync();
   }
 
+
+  /**
+   * Open a frame at full size from the map.
+   *
+   * Needs a round trip: the frames tile carries `server_box_count` but not the boxes,
+   * because frame-relative geometry is meaningless in map space. Serves unpaired
+   * frames too, which is why the endpoint returns FrameDetail rather than the
+   * cluster-shaped ClusterFrameItem.
+   */
+  async function openFrameFullSize(clientId: string): Promise<void> {
+    try {
+      const frame = await getFrameDetail(clientId);
+      frameViewer?.open({ frames: [frame], index: 0, trigger: null });
+    } catch {
+      // The popup is still open with the facts it already had; a failed enlargement
+      // is not worth an alert over.
+    }
+  }
+
+  // ONE viewer for the whole app. Two would mean two <dialog>s on document.body,
+  // each able to be open at once and each inerting the other's document.
+  frameViewer = new FrameViewer();
+
   panel = new DetailPanel(panelContainer, {
     onClose: () => {
       selected = null;
@@ -262,6 +294,7 @@ function renderApp(): void {
       scheduleStats();
     },
     onHover: (feature) => dock?.setReadout(feature),
+    onOpenFrame: (clientId) => void openFrameFullSize(clientId),
     onError: () => {
       // Tile auth is handled by installTileAuthRecovery; anything else is usually
       // the basemap and is not worth interrupting the operator for.
