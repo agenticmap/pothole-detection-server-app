@@ -1,0 +1,73 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Build context exclusions.
+#
+# Without this file the context is ~5 GB — .git alone is 4.1 GB, runs/ 594 MB,
+# storage/ 285 MB, models/ 109 MB — and every `docker compose build` uploads all
+# of it to the daemon before the first instruction runs.
+#
+# One entry here is a correctness fix rather than a speed one:
+# dashboard/node_modules. The Dockerfile runs `npm ci` and THEN `COPY dashboard/`,
+# so an un-ignored node_modules from the host overwrites the freshly installed
+# one — and this repo is developed on Windows, so it carries
+# lightningcss-win32-x64-msvc and the win32 rolldown binding. Those cannot load
+# in node:22-slim, and the failure is a build error deep inside vite rather than
+# anything naming the real cause.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Version control and tooling metadata
+.git
+.gitignore
+.github
+.claude
+.vscode
+.idea
+
+# Python: the image installs from requirements.txt, and a host venv is the wrong
+# platform anyway.
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+htmlcov
+.coverage
+
+# Node: reinstalled inside the image (see the header). dist is rebuilt there too,
+# so shipping the host's would mask a build that no longer works.
+dashboard/node_modules
+dashboard/dist
+
+# Secrets. Not copied by the Dockerfile — compose passes .env at RUN time via
+# env_file — so it has no business entering the context.
+.env
+.env.*
+!.env.example
+
+# Runtime and per-deployment data. All three are bind-mounted by
+# docker-compose.yml, never baked in.
+storage
+test_storage
+models
+
+# Research artefacts: training runs, datasets, exports. Large and irrelevant to
+# a server image.
+runs
+datasets
+files
+
+# Not copied by the Dockerfile (it takes app/, migrations/ and dashboard/ only).
+# NOTE: this is root-anchored, so dashboard/scripts is untouched — the prebuild
+# hook there copies MapLibre's worker into public/, and without it every vector
+# source silently fails to load.
+scripts
+tests
+docs
+*.md
+
+# Compose itself never needs to be in the image.
+docker-compose.yml
+Dockerfile
+.dockerignore
