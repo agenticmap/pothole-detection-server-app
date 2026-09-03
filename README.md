@@ -410,7 +410,9 @@ The schema uses **generic asset naming** (per enterprise-architecture-plan.md §
 | `repair_log` | Audit trail for cluster repair/reopen (Phase 2.5) |
 | `model_disagreement` | device↔server probability gap, for Phase 3 review (Phase 2.3) |
 | `schema_migrations` | Migration ledger — filename, checksum, applied_at (Phase 2.6) |
-| `frame_label` | Human ground truth per frame: 1 pothole / 0 not / -1 unsure (Phase 2.7) |
+| `frame_label` | Human ground truth per frame: 1 pothole / 0 not / -1 unsure (Phase 2.7). `boxed_at` means a human REVIEWED it — not that it has boxes — and the exporter keys on that alone. `boxes_drafted_at` (`migrations/017`) means boxes were saved **including a deliberate empty set**, which is what lets a zero-box draft survive a reload |
+| `frame_box` | Hand-drawn boxes, normalized 0..1 corner-origin (Phase 2.7b, `migrations/013`). Replace-all per frame; the centre-origin YOLO form exists only at export |
+| `frame_label_history` | Append-only record of every verdict (`migrations/017`). `frame_label` holds one row per frame and its write is an upsert, so a second annotator would otherwise silently overwrite the first |
 | `sensor_model.outlier_features_jsonb` | Which features the outlier gate was fitted on (`migrations/014`). `NULL` = the legacy pre-014 five, so an old model is still scored with the set it was fitted on rather than today's default |
 | `asset_cluster.distinct_passes` / `member_span_s` | Corroboration by drive rather than by device, and how long a cluster's members span (`migrations/015`). A span of seconds means one drive-past, not corroboration |
 
@@ -533,7 +535,7 @@ All are run from the repo root and take `DATABASE_URL` from `.env`.
 | `scripts/create_staff.py` | Provision an org + staff account for the dashboard (Phase 2.4) |
 | `scripts/seed_demo.py` | Synthetic clusters so the dashboard has something to render. **Refuses any database but `pothole_test`/`pothole_ci`** (Phase 2.5b) |
 | `scripts/detect_eval.py` | Score stored frames with a given `.onnx` and report a histogram, annotated JPEGs, and (with `--labels`) precision/recall. **Writes nothing** (Phase 2.7) |
-| `scripts/label_frames.py` | Localhost page for hand-labelling frames into `frame_label`. **Refuses `pothole_test`** — the fixtures TRUNCATE it (Phase 2.7) |
+| `scripts/label_frames.py` | Localhost page for hand-labelling frames into `frame_label`. **Refuses `pothole_test`** — the fixtures TRUNCATE it (Phase 2.7). Since 2.7d the operator console does the same job over HTTP; they share the queue predicate (`app/services/label_queue.py`) so they cannot disagree about which frames need work, but **do not run both at once** — one `frame_label` row per frame, upserted |
 | `scripts/backfill_detection.py` | Run detection over already-uploaded frames, then clear `processed_at` so fusion re-scores the pairs (Phase 2.7) |
 | `scripts/pairing_eval.py` | Measure the pairing search: `--diff` compares the old and new rankings, `--fit-lead` fits the camera's lead band from `frame_label`. Read-only (Phase 2.2d) |
 | `scripts/requeue_frames.py` | Clear `processed_at` and re-run fusion over stored frames — the activation path after changing any `FUSION_*` pairing knob (Phase 2.2d) |
@@ -545,6 +547,13 @@ All are run from the repo root and take `DATABASE_URL` from `.env`.
 Note the two guards point in **opposite** directions, deliberately: `seed_demo.py` writes
 fabricated data so it must never touch the real database, while `label_frames.py` writes ground
 truth about real frames so it must never write to the one the tests wipe.
+
+The review API carries **neither** guard, and that is also deliberate. A CLI has no identity —
+nothing distinguishes a careless invocation from a considered one but the DSN — so it needs a
+database-name check. The API substitutes something strictly better: authentication, a role floor
+re-read from `org_member` on every write, `labeled_by` taken from the token rather than the body,
+and an append-only history. A `label_frames`-style guard there would also make the endpoints
+untestable, since the fixtures *require* a test database.
 
 ---
 

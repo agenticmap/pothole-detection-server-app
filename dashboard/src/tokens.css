@@ -59,7 +59,13 @@
 
   --color-text: #201e1d;
   --color-text-muted: var(--ramp-neutral-700);
-  --color-text-subtle: var(--ramp-neutral-600);
+  /* Not ramp-600 (#82796a). That measured 3.61:1 on the canvas and 3.41:1 on a
+   * panel surface -- below the 4.5:1 floor for normal text, and .empty-note carries
+   * real load: the review page's frame caption and band counts, and the detail
+   * panel's four empty states. #6e6659 clears both (4.76 / 4.50) while staying a
+   * visible step lighter than --color-text-muted at 5.53, which is the distinction
+   * the two tokens exist to make. */
+  --color-text-subtle: #6e6659;
   --color-text-inverse: #f9f4ed;
 
   /* Second voice — the sage ramp. Use it for corroboration, citizen-sourced
@@ -83,6 +89,11 @@
    * because it only ever appears on buttons and error text, never on markers. */
   --color-danger: #8c1f10;
   --color-success: var(--ramp-sage-700);
+  /* An advisory voice, distinct from danger and readable as TEXT.
+   * --color-primary is a fill colour -- it carries inverse text on buttons -- and at
+   * 3.03:1 on the canvas it fails as a foreground. This is the same amber, taken
+   * dark enough to clear 4.5:1 on both canvas and panel surface. */
+  --color-warning: #96501a;
 
   /* ── Severity ramp ───────────────────────────────────────────────────────
    * Severity is ORDINAL, so it gets a sequential ramp, not red/amber/green.
@@ -103,6 +114,28 @@
   --severity-3: #c67139;
   --severity-4: #8c491a; /* darkest — most severe */
   --severity-unknown: var(--ramp-neutral-500);
+
+  /* ── Annotation classes ──────────────────────────────────────────────────
+   * A CATEGORICAL palette, deliberately separate from the severity ramp and from
+   * --color-accent-2. Those two carry meanings (how bad, and corroboration); a
+   * class is a third kind of thing and borrowing either would misread.
+   *
+   * Chosen against the constraint that these strokes sit on ARBITRARY road
+   * photography -- grey asphalt, white lane paint, deep shadow, blown-out sky.
+   * Hues are spread around the wheel and kept at high chroma and mid lightness so
+   * none of them disappears into either end of a photo's range, and the pairs that
+   * deuteranopes confuse (red/green) are separated by lightness as well as hue.
+   *
+   * Order IS class_id -- pothole, manhole, grate, patch, crack -- and it is fixed
+   * server-side (app/detection/classes.py). Pothole is index 0, the primary class
+   * and by far the most drawn, so it gets the most legible: a hot magenta that
+   * occurs essentially never in road scenes.
+   */
+  --review-class-0: #ff2d95; /* pothole — magenta, absent from road scenes */
+  --review-class-1: #00b3ff; /* manhole — cyan, cold against warm asphalt */
+  --review-class-2: #ffd400; /* grate   — yellow, brightest, holds in shadow */
+  --review-class-3: #7c4dff; /* patch   — violet, dark enough to hold on sky */
+  --review-class-4: #00e08a; /* crack   — green, separated by lightness from 0 */
 
   /* Repaired sits deliberately OFF the ramp. A repaired defect is a different
    * kind of thing, not a low severity. */
@@ -205,6 +238,29 @@
   --severity-3: #d67f48;
   --severity-4: #b2622d;
   --severity-unknown: #82796a;
+
+  /* The photograph does not change with the theme, so the hues do not either --
+   * only their surrounding chrome does. These are nudged lighter so the swatches in
+   * the class picker keep contrast against the dark surface; the strokes over the
+   * image are effectively unchanged. */
+  --review-class-0: #ff5cae;
+  --review-class-1: #3ec7ff;
+  --review-class-2: #ffe04d;
+  --review-class-3: #a07dff;
+  --review-class-4: #3aeaa5;
+
+  /* Neither of these had a dark value, so both inherited their light one and
+   * rendered at 1.56:1 (danger) and 2.18:1 (success) on the dark canvas -- not
+   * "low contrast", not rendered. .error-text is the review surface's entire
+   * status channel, so a dark-mode operator whose save failed saw a blank line.
+   *
+   * Lifted toward the warm ground rather than brightened neutrally, for the same
+   * reason the severity ramp is re-pointed here: an inverted neutral drags them
+   * grey. Measured on the dark canvas: danger 6.14:1, success 7.89:1. */
+  --color-danger: #ff8a75;
+  --color-success: #9ecf8a;
+  --color-warning: #f6a06b;
+
   --color-repaired: #8b8171;
   --marker-halo: #2e2b25;
 

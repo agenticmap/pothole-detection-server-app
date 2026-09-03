@@ -103,7 +103,6 @@ import argparse
 import asyncio
 import json
 import sys
-from collections import defaultdict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -128,14 +127,25 @@ from app.detection.classes import (  # noqa: E402
     is_thin,
 )
 from app.services.frame_service import resolve_local_frame_path  # noqa: E402
+from app.services.label_queue import (  # noqa: E402
+    count_scored,
+    rank_by_score,
+)
+from app.services.label_queue import (
+    is_done as _is_done,
+)
+from app.services.label_queue import (
+    stratified as _stratified,
+)
+from app.services.label_queue import (
+    stratum as _stratum,
+)
+from app.services.label_queue import (
+    wants_frame as _wants_frame,
+)
 
 # Inverse of the test guard: these are the databases this script must NOT write to.
 _TEST_DATABASES = frozenset({"pothole_test", "pothole_ci"})
-
-# Local hours (UTC-4, Toronto) counted as daylight. Night frames are a different
-# detection problem -- rain on glass, headlight glare -- and must be measured apart.
-_DAY_HOURS = range(6, 20)
-_LOCAL_OFFSET_HOURS = 4
 
 _SELECT_SQL = """
 SELECT f.client_id, f.jpeg_url, f.device_probability, f.device_detections, f.ts_utc,
@@ -203,54 +213,6 @@ def _database_name(dsn: str) -> str:
 # ── Queue building ────────────────────────────────────────────────────────────
 
 
-def _stratum(row) -> tuple[int, str]:
-    p = row["device_probability"]
-    decile = 0 if p is None else min(9, int(p * 10))
-    hour = (row["ts_utc"].hour - _LOCAL_OFFSET_HOURS) % 24
-    return decile, "day" if hour in _DAY_HOURS else "night"
-
-
-def _stratified(rows: list, count: int) -> list:
-    """Round-robin across (decile, day/night) buckets until `count` is reached."""
-    buckets: dict[tuple[int, str], list] = defaultdict(list)
-    for r in rows:
-        buckets[_stratum(r)].append(r)
-
-    picked, keys = [], sorted(buckets)
-    i = 0
-    while len(picked) < count and any(buckets[k] for k in keys):
-        k = keys[i % len(keys)]
-        if buckets[k]:
-            picked.append(buckets[k].pop(0))
-        i += 1
-    return picked
-
-
-def _is_done(row, *, box: bool) -> bool:
-    """Has this frame had the thing the current mode produces?"""
-    return row["boxed_at"] is not None if box else row["label"] is not None
-
-
-def _wants_frame(row, *, box: bool, review: bool) -> bool:
-    """Does this row belong in the queue?
-
-    `--review` is a check-my-work mode, not an "include everything" switch: it queues
-    ONLY finished frames. Mixing finished and outstanding work in one queue means
-    paging past completed frames to reach the next real one, which is the whole
-    complaint this function exists to answer. The two jobs stay separate.
-
-    box + review     -> only frames already signed off
-    box              -> only judged frames NOT yet signed off  (the pass itself)
-    verdict + review -> only frames already labelled
-    verdict          -> only frames not yet labelled
-    """
-    # Box mode never queues an unjudged frame in either direction: drawing a box
-    # before deciding what the frame IS is exactly the anchoring this tool avoids.
-    if box and row["label"] is None:
-        return False
-    return _is_done(row, box=box) if review else not _is_done(row, box=box)
-
-
 async def _load_queue(args) -> list[dict]:
     pool = await create_pool()
     try:
@@ -306,30 +268,25 @@ async def _load_queue(args) -> list[dict]:
 
 
 def _by_score(rows: list, count: int) -> list:
-    """Highest server_probability first.
+    """CLI wrapper over label_queue.rank_by_score that reports what it dropped.
 
-    Why this exists. The detector's problem is a shortage of in-domain POSITIVES, not
-    a shortage of labels -- three labelling passes added ~200 negatives each and each
-    cost recall. Ranking by score puts the densest seam of likely potholes at the top
-    of the queue: measured on the holdout, frames scoring 0.30+ are 62-75% pothole
-    against a 46% base rate, while the 0.00-0.05 band is 32%.
-
-    Scores PRIORITISE and never auto-label. Even the bottom band holds 19 of 65
-    holdout positives, so a threshold that discards low scorers would throw away most
-    of the data the model most needs. That is why there is no auto-accept/auto-reject
-    here, only an ordering.
+    The ranking itself lives in app/services/label_queue.py so the console's review
+    queue orders frames identically. Only the operator-facing reporting is here: a
+    service module called from a request handler must not print, and the "run the
+    backfill first" message is the thing that stops a silent empty queue looking like
+    a finished corpus.
     """
-    scored = [r for r in rows if r["server_probability"] is not None]
-    if not scored:
+    ranked = rank_by_score(rows, count)
+    n_scored = count_scored(rows)
+    if n_scored == 0:
         print("  no frame carries a server_probability -- run "
               "scripts/backfill_detection.py first, or use --order stratified",
               file=sys.stderr)
         return []
-    if len(scored) < len(rows):
-        print(f"  {len(rows) - len(scored)} frame(s) are unscored and excluded from "
+    if n_scored < len(rows):
+        print(f"  {len(rows) - n_scored} frame(s) are unscored and excluded from "
               f"--order score")
-    scored.sort(key=lambda r: r["server_probability"], reverse=True)
-    return scored[:count]
+    return ranked
 
 
 def _id_filter(args) -> set[str] | None:

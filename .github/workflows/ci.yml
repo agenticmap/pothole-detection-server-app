@@ -77,3 +77,38 @@ jobs:
       - name: Test
         # -p no:randomly is not needed; the DB fixture TRUNCATEs between tests.
         run: pytest -q
+
+  # The dashboard had no CI at all until now: `tsc --noEmit` is its only automated
+  # gate and it ran on no machine but a developer's. Separate job because it needs
+  # no database -- it must not queue behind the PostGIS service container.
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        # Pure logic only -- box geometry and the review queue's state machine. No
+        # jsdom, deliberately: keeping them DOM-free is what makes them fast and what
+        # keeps the rules they cover out of the view layer.
+        run: npm run test:unit
+
+      - name: Build
+        # `npm run build` is `tsc --noEmit && vite build`, and its prebuild hook copies
+        # MapLibre's worker into public/. That copy is load-bearing: MapLibre 6 resolves
+        # the worker URL at runtime, so no bundler emits it, and a 404 there makes EVERY
+        # vector source silently never load -- no error, no warning, just an empty map.
+        # That shipped once. This step fails if the copy step is ever removed.
+        run: npm run build

@@ -31,18 +31,36 @@ export const ASSET_TYPES: AssetType[] = [
   { id: 'crosswalk', label: 'Crosswalks', enabled: false },
 ];
 
-const MODULES = [
+/** Modules that exist. Everything else in the rail is a deliberately disabled slot. */
+export type ModuleId = 'map' | 'review';
+
+const MODULES: { id: string; label: string; glyph: string; enabled: boolean }[] = [
   { id: 'map', label: 'Map', glyph: 'M', enabled: true },
+  // 'F', not 'R': the brand mark is already an R disc and Reports below wants R too.
+  { id: 'review', label: 'Frame review', glyph: 'F', enabled: true },
   { id: 'inventory', label: 'Inventory', glyph: 'I', enabled: false },
   { id: 'work-orders', label: 'Work orders', glyph: 'W', enabled: false },
   { id: 'reports', label: 'Reports', glyph: 'R', enabled: false },
   { id: 'admin', label: 'Admin', glyph: 'A', enabled: false },
 ];
 
+/** The review module's slice of the hash, so a colleague can be sent one frame. */
+export interface ReviewUrlState {
+  mode: 'verdict' | 'box';
+  order: 'score' | 'blind';
+  review: boolean;
+  minScore: number | null;
+  maxScore: number | null;
+  seed: number | null;
+  frame: string | null;
+}
+
 export interface UrlState {
   asset: string;
   view: MapView | null;
   cluster: string | null;
+  module: ModuleId;
+  review: ReviewUrlState | null;
 }
 
 /**
@@ -66,22 +84,67 @@ export function readUrlState(): UrlState {
   const lat = num('lat');
   const lon = num('lon');
   const zoom = num('z');
+
+  // "band=0.30:" and "band=:0.40" are both legal — a band open at one end is the
+  // normal case. Split on a colon rather than a dash so a negative never has to be
+  // disambiguated, and parse each half through the same absent-vs-zero guard,
+  // because min_score=0 is meaningful.
+  const band = (params.get('band') ?? '').split(':');
+  const half = (raw: string | undefined): number | null => {
+    if (raw === undefined || raw.trim() === '') return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  const module: ModuleId = params.get('m') === 'review' ? 'review' : 'map';
   return {
     asset: params.get('asset') ?? 'pothole',
     view: lat !== null && lon !== null && zoom !== null ? { lat, lon, zoom } : null,
     cluster: params.get('cluster'),
+    module,
+    review:
+      module === 'review'
+        ? {
+            mode: params.get('qmode') === 'box' ? 'box' : 'verdict',
+            // Carried explicitly: without it a shared blind link would degrade to
+            // score ordering, which is a different anti-anchoring posture than the
+            // sender chose.
+            order: params.get('qorder') === 'blind' ? 'blind' : 'score',
+            review: params.get('qreview') === '1',
+            minScore: half(band[0]),
+            maxScore: half(band[1]),
+            seed: num('seed'),
+            frame: params.get('frame'),
+          }
+        : null,
   };
 }
 
 export function writeUrlState(state: UrlState): void {
   const params = new URLSearchParams();
   params.set('asset', state.asset);
+  // Map keys are written in EVERY module, so switching to review and back returns
+  // the operator to the viewport they left.
   if (state.view) {
     params.set('z', state.view.zoom.toFixed(2));
     params.set('lat', state.view.lat.toFixed(6));
     params.set('lon', state.view.lon.toFixed(6));
   }
   if (state.cluster) params.set('cluster', state.cluster);
+  // Omitted for 'map', so every link written before this module existed still
+  // round-trips byte-identically.
+  if (state.module !== 'map') params.set('m', state.module);
+  const r = state.review;
+  if (r) {
+    params.set('qmode', r.mode);
+    params.set('qorder', r.order);
+    if (r.review) params.set('qreview', '1');
+    if (r.minScore !== null || r.maxScore !== null) {
+      params.set('band', `${r.minScore ?? ''}:${r.maxScore ?? ''}`);
+    }
+    if (r.order === 'blind' && r.seed !== null) params.set('seed', String(r.seed));
+    if (r.frame) params.set('frame', r.frame);
+  }
   const next = `#/${params.toString()}`;
   if (next !== location.hash) history.replaceState(null, '', next);
 }
@@ -111,6 +174,7 @@ export interface ShellCallbacks {
   onSignOut: () => void;
   /** Fired after the theme flips, so the map can repaint its layers. */
   onThemeChange: (theme: Theme) => void;
+  onModuleChange: (module: ModuleId) => void;
 }
 
 /**
@@ -141,11 +205,17 @@ export function buildShell(
   root: HTMLElement,
   opts: { assetType: string; userEmail: string; orgId: string; role: string },
   callbacks: ShellCallbacks,
-): { mapContainer: HTMLElement; panelContainer: HTMLElement } {
+): {
+  mapContainer: HTMLElement;
+  panelContainer: HTMLElement;
+  moduleContainer: HTMLElement;
+  setActiveModule: (id: ModuleId) => void;
+} {
   const rail = el('nav', { class: 'rail', 'aria-label': 'Modules' });
+  const railButtons = new Map<string, HTMLButtonElement>();
   for (const module of MODULES) {
     const button = el('button', {
-      class: module.enabled ? 'rail-item is-active' : 'rail-item is-disabled',
+      class: module.enabled ? 'rail-item' : 'rail-item is-disabled',
       type: 'button',
       disabled: !module.enabled,
       title: module.enabled ? module.label : `${module.label} — not yet available`,
@@ -155,8 +225,30 @@ export function buildShell(
       el('span', { class: 'rail-glyph', text: module.glyph, 'aria-hidden': 'true' }),
       el('span', { class: 'rail-label', text: module.label }),
     );
+    if (module.enabled) {
+      railButtons.set(module.id, button);
+      button.addEventListener('click', () => {
+        // The rail asks; it does not decide. setActiveModule is the only writer of
+        // is-active, so the highlight also follows state arriving from the hash on
+        // load rather than only from a click.
+        callbacks.onModuleChange(module.id as ModuleId);
+        // A document-level keydown handler plus a focused button means Space and
+        // Enter would fire the click AND the shortcut.
+        button.blur();
+      });
+    }
     rail.append(button);
   }
+
+  /** Single writer of the rail's active state, so it cannot disagree with the app. */
+  const setActiveModule = (id: ModuleId): void => {
+    for (const [moduleId, button] of railButtons) {
+      const active = moduleId === id;
+      button.classList.toggle('is-active', active);
+      if (active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
+    }
+  };
 
   const assetSelect = el('select', { class: 'asset-select', 'aria-label': 'Asset type' });
   for (const asset of ASSET_TYPES) {
@@ -201,15 +293,18 @@ export function buildShell(
 
   const mapContainer = el('div', { class: 'map-container' });
   const panelContainer = el('div', { class: 'panel-container' });
+  // A fourth sibling in the same flex row. Modules swap by toggling `hidden`; the
+  // map is never destroyed, because a WebGL context is expensive to rebuild.
+  const moduleContainer = el('div', { class: 'module-container', hidden: 'hidden' });
 
   mapContainer.append(buildLegend());
 
   root.replaceChildren(
     topbar,
-    el('div', { class: 'workspace' }, [rail, mapContainer, panelContainer]),
+    el('div', { class: 'workspace' }, [rail, mapContainer, panelContainer, moduleContainer]),
   );
 
-  return { mapContainer, panelContainer };
+  return { mapContainer, panelContainer, moduleContainer, setActiveModule };
 }
 
 /**
@@ -343,6 +438,13 @@ export function installLegendResponsiveness(
   publishControlStackHeight(mapContainer);
   const observer = new ResizeObserver((entries) => {
     const width = entries[0]?.contentRect.width ?? mapContainer.clientWidth;
+    // A hidden pane is not a layout state to react to, it is an absent one. Switching
+    // to another module sets `hidden`, which reports width 0 — and every line below
+    // then misbehaves: the legend flips to its compact strip, the control-stack height
+    // is measured off a display:none element as 0, and map.resize() sizes the canvas
+    // to 0x0. All of it would have to be undone on the way back. The guard wraps the
+    // WHOLE callback for that reason, not just the compact flip.
+    if (width === 0 || !mapContainer.isConnected) return;
     const next = width < COMPACT_BELOW_PX;
     if (next !== compact) {
       compact = next;

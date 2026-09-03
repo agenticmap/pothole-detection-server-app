@@ -109,9 +109,21 @@ src/
   panel/
     panel.ts       detail panel; one AbortController per open
     frames.ts      blob-URL images, concurrency-capped
+  review/          the frame review module (Phase 2.7d)
+    geometry.ts    px <-> normalized, boxKey, isThin. PURE — no DOM
+    queue-state.ts the frame state machine. PURE — no DOM, no fetch
+    api.ts         the five /api/v1/review endpoints
+    images.ts      bounded object-URL cache; deliberately NOT panel/frames.ts's policy
+    overlay.ts     the SVG box layer; drag-to-draw, hit-test
+    keys.ts        two key maps, and the legend generated from them
+    review.ts      the module controller
   tokens.css       semantic design tokens
   styles.css       shell layout + components
 ```
+
+The two `review/` files marked PURE are pure on purpose: the state machine and the coordinate
+maths are the two places a mistake is invisible on screen, so they are testable without a browser
+and are where the unit specs live.
 
 ## Things that will bite you
 
@@ -144,6 +156,16 @@ Each of these cost real time to find. They are in the code as comments too.
 - **`Number(null)` is `0`.** Parse URL params through a helper that distinguishes absent from
   zero, or a first-time visitor lands at (0, 0).
 - **Never use `innerHTML`.** The repair note is operator free text the API echoes back.
+- **A semantic colour needs a value in BOTH theme blocks.** `--color-danger` and `--color-success`
+  were defined only in `:root`, so they inherited their light values into dark mode and rendered at
+  1.56:1 and 2.18:1 — not "low contrast", *not rendered*. Every error message in the console was
+  invisible in dark mode. Check new tokens against both canvases.
+- **`--color-primary` is a fill colour, not a foreground.** It carries inverse text on buttons; as
+  text on the canvas it measures 3.03:1. Use `--color-warning` / `--color-danger` / `--color-success`
+  for status text.
+- **`render()` rebuilds the subtree, so focus dies with it.** Anything focusable needs a
+  `data-focus-key` so it can be restored — and the capture has to happen in `load()` too, because a
+  reload clears the DOM at skeleton time long before `render()` runs.
 
 ## Raw detections
 
@@ -169,14 +191,94 @@ there: only 110 of 166 admitted observations reach one, and 1,183 of 5,615 frame
 Hiding that would make the pipeline's own gates unfalsifiable from the UI. Click any point for its
 full record.
 
+## Frame review
+
+The **Frame review** module in the rail is the labelling loop that `scripts/label_frames.py` used
+to carry. It writes the same two tables by the same rules — the queue predicate is literally shared
+code (`app/services/label_queue.py`) — so a verdict recorded here shows up under
+`python scripts/label_frames.py --review`, and vice versa.
+
+**Do not run both at once.** They are two clients over one `frame_label` row per frame, and the
+write is an upsert.
+
+### Two modes, two key maps
+
+They are deliberately separate: `1` means "this frame is a pothole" in one and "draw the next box
+as a pothole" in the other. Sharing one handler would make the on-screen legend a lie in whichever
+mode lost. The legend under the stage is generated from the same array the dispatcher reads, so it
+cannot drift.
+
+**Judge** — `1` pothole · `0` not · `u` unsure · `m`/`s`/`g`/`w` reason tags · `n` note ·
+`b` show the model's boxes · `j`/`k` or arrows to move · `r` reload.
+
+**Draw boxes** — `1`–`5` active class · drag on the image to draw · click a box to select ·
+`Del` delete · `Esc` deselect · `Enter` or `j`/`k` **save and move** · `Shift`+move to peek without
+recording · `Home`/`End` jump · `s` submit every draft · `r` re-sync.
+
+### Layout
+
+Two columns: the photograph takes the pane, the controls sit in a rail that never scrolls away.
+The stage takes each frame's **own aspect ratio**, set per frame from `naturalWidth/Height`, so it
+scales up to fill the space — including for the rotated landscape captures in this corpus.
+
+That is deliberate and load-bearing: it is how the image grows *without* `object-fit`. With
+`contain` the rendered content box stops matching the element box, and every normalized overlay
+coordinate would be off by the letterbox. Giving the element the image's ratio makes the two boxes
+identical by construction. **Do not add `object-fit` to `.review-frame`.**
+
+The **Pass** group in the rail carries the ordering and the check-my-work switch. `Blind` is not a
+rendering preference: the server withholds the score and every box, so the model's opinion cannot
+anchor yours even via devtools.
+
+### Things worth knowing before a pass
+
+- **Saving is not submitting.** Drawing then moving on stores a *draft*: the boxes are on the
+  server immediately, so a crash or a closed tab costs nothing, but `boxed_at` stays null and the
+  exporter cannot see the frame until you press `s`.
+- **Saving zero boxes is a real answer.** It records "reviewed, genuinely clean", which is what
+  separates a true background training image from a frame nobody opened. This survives a reload —
+  the CLI could not do that.
+- **`r` re-syncs; it does not advance.** Drafts do not leave the box-mode queue, so the same frames
+  come back. Only `s` clears them.
+- **The band counter is the server's, not your session's.** It does not tick down as you draft, for
+  the same reason. Your own tally is shown separately.
+- **Model boxes are off by default and `b` reveals them.** That is not a preference: labelling
+  passes that anchored on the model's opinion are a measured cause of the detector getting worse
+  (recall 0.708 → 0.354 across three of them). There is no "accept the model's boxes" button, on
+  purpose.
+- A **blind** pass omits the scores server-side rather than hiding them, so they are not in the
+  payload at all.
+- **Every box carries its class name on the image.** Five hues is where colour vision breaks down,
+  so the stroke colour is reinforcement, never the only signal.
+- **Held keys do not write.** A stuck `1` used to record a verdict per key-repeat; the dispatcher
+  now ignores `e.repeat`, and it ignores Enter/Space aimed at a focused button so the shortcuts and
+  ordinary Tab navigation can coexist.
+
+### Starting the seam
+
+The band worth clearing is **≥ 0.30** — 1,041 unlabelled frames, the densest expected pothole
+yield in the corpus. Judge first, then switch to Draw boxes, which only queues frames that already
+have a verdict. Background in
+[`docs/phases/phase-2.7d-review-surface.md`](../docs/phases/phase-2.7d-review-surface.md).
+
 ## Not built
 
-The inventory list, work orders, reports, and any automated frontend tests. The module rail has
-disabled slots for the first three so adding them is additive.
+The inventory list, work orders and reports. The module rail has disabled slots for all three, so
+adding them is additive — **Frame review was added exactly that way** in Phase 2.7d, which is what
+turned the rail from decoration into working navigation (its buttons previously had no click
+handler at all).
 
-`npm run build` runs `tsc --noEmit` first, so the strict type-check is the only automated gate the
-frontend has. The server suite (`pytest`, 453 tests) covers the endpoints behind it but nothing in
-`dashboard/src`.
+Box drawing is mouse-only and cannot reasonably be made otherwise. The verdict path is fully
+keyboard-operable; saying so plainly is better than implying parity.
+
+Two reviewers working the same band will silently overwrite each other's *boxes*: `frame_box` is
+replace-all with no history table. `frame_label_history` covers verdicts only.
+
+**Corrected from an earlier version of this section**, which said there were no automated frontend
+tests. There are now 69 vitest specs over `review/geometry.ts` and `review/queue-state.ts`
+(`npm run test:unit`), and CI gained a `dashboard` job running `npm ci`, `test:unit` and `build` —
+so `tsc --noEmit` no longer runs on no machine but a developer's. Coverage is still only those two
+modules; nothing else in `dashboard/src` is tested.
 
 Filters and dark mode **were** built in Phase 2.5b; the basemap is no longer raster OSM. See
 [`docs/phases/phase-2.5b-dashboard-design.md`](../docs/phases/phase-2.5b-dashboard-design.md) for the as-built

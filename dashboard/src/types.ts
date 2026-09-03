@@ -16,6 +16,39 @@ export interface ClusterMemberItem {
   fused_confidence: number | null;
 }
 
+/**
+ * One detected box. Normalized 0..1, corner-origin, FULL-frame.
+ *
+ * The ROI crop and letterbox padding are already undone server-side
+ * (app/detection/onnx_v1.py::_to_detection), so rendering is `x * renderedWidth`
+ * with no geometry knowledge here. Same convention as the human boxes in frame_box.
+ */
+export interface DetectionBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  confidence: number;
+  label?: string | null;
+  class_id?: number | null;
+}
+
+/**
+ * The hybrid backend's VLM verdict, lifted out of server_detections server-side.
+ * Present only when a VLM verified the frame — under that backend server_probability
+ * is a blend, and this is what tells the two apart.
+ *
+ * `rationale` is free text from a third-party model. Render with textContent only;
+ * dom.ts has no innerHTML escape hatch, so use el({ text }) and never build markup.
+ */
+export interface VlmVerdict {
+  is_pothole: boolean;
+  confidence: number;
+  severity: string | null;
+  rationale: string;
+  model_id: string;
+}
+
 export interface ClusterFrameItem {
   client_id: string;
   lat: number;
@@ -32,6 +65,11 @@ export interface ClusterFrameItem {
   fused_confidence: number | null;
   delta_ms: number | null;
   delta_m: number | null;
+  /** Server detector boxes. Never contains the VLM verdict — filtered server-side. */
+  server_boxes: DetectionBox[];
+  /** On-device detector boxes, same convention. */
+  device_boxes: DetectionBox[];
+  vlm_verdict: VlmVerdict | null;
 }
 
 export interface RepairLogItem {

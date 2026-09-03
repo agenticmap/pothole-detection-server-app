@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-31
+updated: 2026-09-02
 ---
 
 # Documentation index
@@ -52,6 +52,7 @@ are usually the more useful ones.
 | [`phase-2.7-detection-enablement.md`](./phases/phase-2.7-detection-enablement.md) | First real ONNX execution, ROI crop, labelling tool, offline eval |
 | [`phase-2.7b-road-surface-classes.md`](./phases/phase-2.7b-road-surface-classes.md) | **Negative result.** Multi-class distractors cost recall; every real-domain box was a negative |
 | [`phase-2.7c-public-data.md`](./phases/phase-2.7c-public-data.md) | **Qualified no.** RDD2022 reversed the collapse but did not beat v1 |
+| [`phase-2.7d-review-surface.md`](./phases/phase-2.7d-review-surface.md) | The labelling loop moved into the console — and a submit path that would have signed off frames nobody opened, which the exporter ships as background images |
 | [`phase-2.9-vlm-verification.md`](./phases/phase-2.9-vlm-verification.md) | The VLM has never been measured; the harness that will, and the thresholds it refutes |
 | [`integration-round-2026-08.md`](./phases/integration-round-2026-08.md) | **The first full round.** An outlier gate that had learned to reject potholes, a severity scale saturating below its own minimum — and the finding that no cluster has ever been corroborated |
 

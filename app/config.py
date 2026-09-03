@@ -276,7 +276,13 @@ class Settings(BaseSettings):
     detection_interval_minutes: int = 2            # poll cadence (shorter than fusion's 5)
     detection_batch_size: int = 200
     detection_model_path: str = ""                 # path to the YOLOv8 .onnx (backend=onnx)
-    detection_model_id: str = "yolov8s_pothole_v1"
+    # Must name the weights actually loaded: this is the default for
+    # backfill_detection.py --model-id, so a stale value here is written to
+    # every asset_frame.server_model_id and model_disagreement row scored
+    # without an explicit flag. RDD-derived weights keep the _rdd suffix, which
+    # is how docs/research/detection-research-record.md retires them if the
+    # licence dispute resolves badly.
+    detection_model_id: str = "yolo11s_pothole_v1"
     detection_http_url: str = ""                   # external inference endpoint (backend=http)
     detection_input_size: int = 640
     detection_conf_threshold: float = 0.25

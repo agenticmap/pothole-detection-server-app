@@ -120,7 +120,14 @@ export class PotholeMap {
     this.map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right');
     this.map.addControl(new ScaleControl({ unit: 'metric' }), 'bottom-left');
 
-    this.map.on('load', () => this.addClusterLayers());
+    // Guarded for the same reason applyTheme's styledata handler is: flipping the
+    // theme before the initial style has loaded runs setStyle first, whose handler
+    // adds the source, and then this fires and throws "Source already exists" —
+    // which aborts addClusterLayers partway and leaves the map with no cluster
+    // layers at all. Reachable by toggling the theme within a second of signing in.
+    this.map.on('load', () => {
+      if (!this.map.getSource(SOURCE_ID)) this.addClusterLayers();
+    });
     this.map.on('moveend', () => this.options.onViewChange(this.currentView()));
     this.map.on('error', (e: ErrorEvent) => {
       // 401s are handled by installTileAuthRecovery (refresh + refetch), since an

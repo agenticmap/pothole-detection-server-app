@@ -17,12 +17,14 @@ import {
   buildShell,
   installLegendResponsiveness,
   setOpenCount,
+  type ModuleId,
   readUrlState,
   refreshLegend,
   setLegendCounts,
   writeUrlState,
 } from './shell.ts';
 import { Dock } from './dock.ts';
+import { ReviewModule } from './review/review.ts';
 import { getStats } from './stats.ts';
 import { initTheme } from './theme.ts';
 
@@ -44,6 +46,9 @@ if (!root) throw new Error('#app not found');
 let map: PotholeMap | null = null;
 let panel: DetailPanel | null = null;
 let dock: Dock | null = null;
+let review: ReviewModule | null = null;
+/** Set by each render, so the session-expiry handler can release its resources. */
+let teardownApp: (() => void) | null = null;
 
 function renderLogin(message?: string): void {
   const emailInput = el('input', {
@@ -104,8 +109,26 @@ function renderApp(): void {
   const view = urlState.view ?? DEFAULT_VIEW;
   let assetType = urlState.asset;
   let selected: string | null = urlState.cluster;
+  let activeModule = urlState.module;
+  // Captured rather than closed over: showModule is a hoisted function declaration,
+  // which loses the `if (!session) return` narrowing above. UI hint only either way —
+  // the server re-reads org_member on every write.
+  const role = session.role;
+  const canWrite = (): boolean => role === 'staff' || role === 'admin';
 
-  const { mapContainer, panelContainer } = buildShell(
+  /** Release every long-lived resource. Sign-out and session expiry both need this. */
+  function teardown(): void {
+    map?.destroy();
+    dock?.destroy();
+    review?.destroy();
+    map = null;
+    panel = null;
+    dock = null;
+    review = null;
+  }
+  teardownApp = teardown;
+
+  const { mapContainer, panelContainer, moduleContainer, setActiveModule } = buildShell(
     root!,
     {
       assetType,
@@ -121,11 +144,7 @@ function renderApp(): void {
       },
       onSignOut: () => {
         clearSession();
-        map?.destroy();
-        dock?.destroy();
-        map = null;
-        panel = null;
-        dock = null;
+        teardown();
         renderLogin();
       },
       onThemeChange: (theme) => {
@@ -134,6 +153,9 @@ function renderApp(): void {
         map?.applyTheme(theme);
         refreshLegend();
       },
+      onModuleChange: (next) => {
+        void showModule(next);
+      },
     },
   );
 
@@ -141,7 +163,49 @@ function renderApp(): void {
   mapContainer.append(banner);
 
   function sync(): void {
-    writeUrlState({ asset: assetType, view: map?.currentView() ?? view, cluster: selected });
+    // writeUrlState rebuilds the query from scratch, so the review slice has to be
+    // threaded through here or the next map pan silently drops every review key.
+    writeUrlState({
+      asset: assetType,
+      view: map?.currentView() ?? view,
+      cluster: selected,
+      module: activeModule,
+      review: activeModule === 'review' ? (review?.urlState() ?? urlState.review) : null,
+    });
+  }
+
+  /**
+   * Swap modules by visibility, never by teardown.
+   *
+   * The map keeps its WebGL context and its loaded tiles, so returning to it is
+   * instant. Two ordering rules: never resize while hidden (a display:none container
+   * reports clientWidth 0 and MapLibre would size its canvas to 0x0), and resize on
+   * the way back inside a rAF so layout has settled first.
+   */
+  async function showModule(next: ModuleId): Promise<void> {
+    activeModule = next;
+    setActiveModule(next);
+    const onMap = next === 'map';
+
+    mapContainer.hidden = !onMap;
+    panelContainer.hidden = !onMap;
+    moduleContainer.hidden = onMap;
+
+    if (onMap) {
+      review?.hide();
+      requestAnimationFrame(() => map?.resize());
+    } else {
+      // Constructed lazily: an operator who never opens review never pays for it.
+      if (!review) {
+        review = new ReviewModule(moduleContainer, {
+          onStateChange: () => sync(),
+          canWrite,
+        });
+        review.applyUrlState(urlState.review);
+      }
+      await review.show();
+    }
+    sync();
   }
 
   panel = new DetailPanel(panelContainer, {
@@ -257,10 +321,20 @@ function renderApp(): void {
     map.setSelected(selected);
     void panel.open(selected);
   }
-  sync();
+
+  // Applied last, so the map is fully constructed before it may be hidden. Also the
+  // only thing that lights the rail: setActiveModule is the single writer of
+  // is-active, so the highlight follows state — including state arriving from a
+  // shared #/m=review link — rather than only from a click.
+  void showModule(activeModule);
 }
 
-onSessionExpired(() => renderLogin('Your session expired. Please sign in again.'));
+onSessionExpired(() => {
+  // Previously this rendered the login screen over a live map, leaking its WebGL
+  // context and, now, the review module's object URLs and abort controllers.
+  teardownApp?.();
+  renderLogin('Your session expired. Please sign in again.');
+});
 
 // MapLibre 6 requires WebGL2. Without this the failure looks like "the dashboard
 // is blank", which is a miserable thing to debug over the phone with a city IT

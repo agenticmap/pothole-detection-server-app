@@ -232,7 +232,21 @@ FROM (
         -- Box count rather than the boxes themselves: the geometry is
         -- frame-relative and means nothing in map space, but "how many did it
         -- find" is the number an operator reads.
-        COALESCE(jsonb_array_length(f.server_detections), 0) AS server_box_count,
+        --
+        -- Counts elements carrying a bbox, NOT jsonb_array_length(): the hybrid
+        -- backend appends a "_vlm_verdict" element to this same list
+        -- (app/detection/hybrid_v1.py), which has no bbox and is not a box. Length
+        -- would report one box too many on every VLM-verified frame and size the
+        -- map's frame markers wrong. The typeof guard keeps a malformed row from
+        -- raising for the whole tile. Matches app/services/detection_boxes.py,
+        -- which filters structurally for the same reason.
+        COALESCE((
+            SELECT count(*)
+            FROM jsonb_array_elements(
+                     CASE WHEN jsonb_typeof(f.server_detections) = 'array'
+                          THEN f.server_detections ELSE '[]'::jsonb END) AS d
+            WHERE jsonb_typeof(d -> 'bbox') = 'object'
+        ), 0)::int AS server_box_count,
         (f.detected_at IS NOT NULL) AS detected,
         p.fused_confidence,
         (p.frame_client_id IS NOT NULL) AS paired,

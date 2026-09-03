@@ -48,6 +48,42 @@ class ClusterMemberItem(BaseModel):
 # ── Frames ────────────────────────────────────────────────────────────────────
 
 
+class DetectionBox(BaseModel):
+    """One detected box, in the pipeline's single coordinate convention.
+
+    Normalized 0..1, corner-origin, FULL-frame. The ROI crop and the letterbox padding
+    are already undone before storage (app/detection/onnx_v1.py::_to_detection), so a
+    client multiplies by the rendered width/height and draws. Same convention as
+    frame_box; the centre-origin YOLO form exists only in export_labeled_frames.py.
+    """
+
+    x: float
+    y: float
+    w: float
+    h: float
+    confidence: float = 0.0
+    label: str | None = None
+    class_id: int | None = None
+
+
+class VlmVerdictItem(BaseModel):
+    """The hybrid detector's VLM verdict, lifted out of server_detections.
+
+    Present only under DETECTION_BACKEND=hybrid, where server_probability is a blend
+    rather than the detector's own number -- this is what lets an operator tell the
+    two apart.
+
+    WARNING: `rationale` is free text from a third-party model, echoed to a browser.
+    Render with textContent, never innerHTML.
+    """
+
+    is_pothole: bool
+    confidence: float
+    severity: str | None = None
+    rationale: str = ""
+    model_id: str = ""
+
+
 class ClusterFrameItem(BaseModel):
     """A camera frame paired to one of this cluster's member observations.
 
@@ -72,6 +108,16 @@ class ClusterFrameItem(BaseModel):
     fused_confidence: float | None = None
     delta_ms: int | None = Field(default=None, description="Time offset from the paired event.")
     delta_m: float | None = Field(default=None, description="Distance from the paired event.")
+    server_boxes: list[DetectionBox] = Field(
+        default_factory=list,
+        description="Server detector boxes. Normalized 0..1, corner-origin, full-frame.",
+    )
+    device_boxes: list[DetectionBox] = Field(
+        default_factory=list, description="On-device detector boxes. Same convention."
+    )
+    vlm_verdict: VlmVerdictItem | None = Field(
+        default=None, description="Present only when the hybrid backend verified this frame."
+    )
 
 
 # ── Repair history ────────────────────────────────────────────────────────────

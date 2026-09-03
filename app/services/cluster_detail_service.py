@@ -42,6 +42,7 @@ from app.models.clusters import (
     ClusterMemberItem,
     RepairLogItem,
 )
+from app.services.detection_boxes import parse_detection_boxes, parse_vlm_verdict
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,8 @@ SELECT * FROM (
         f.server_probability,
         f.server_model_id,
         f.detected_at,
+        f.server_detections,
+        f.device_detections,
         fp.event_client_id AS paired_observation_id,
         fp.fused_confidence,
         fp.delta_ms,
@@ -202,6 +205,12 @@ async def get_cluster_detail(
             fused_confidence=r["fused_confidence"],
             delta_ms=r["delta_ms"],
             delta_m=r["delta_m"],
+            # Parsed rather than passed through: the detections column also carries the
+            # hybrid backend's {"_vlm_verdict": ...} element, which has no bbox and would
+            # otherwise reach a box renderer. See app/services/detection_boxes.py.
+            server_boxes=parse_detection_boxes(r["server_detections"]),
+            device_boxes=parse_detection_boxes(r["device_detections"]),
+            vlm_verdict=parse_vlm_verdict(r["server_detections"]),
         )
         for r in frame_rows[:frame_limit]
     ]

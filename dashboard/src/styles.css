@@ -204,6 +204,20 @@ button:disabled {
   height: 100%;
 }
 
+/* ── Module pane ───────────────────────────────────────────────────────────
+ * A sibling of .map-container in the same flex row, shown when a non-map module
+ * is active. Sized with flex for the same reason the map is: the review stage
+ * measures itself against its rendered width, so a pane that does not take part
+ * in the layout would give every box the wrong coordinates. */
+
+.module-container {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
 .legend {
   position: absolute;
   left: var(--space-3);
@@ -651,6 +665,22 @@ button:disabled {
 /* ── Narrow screens: the panel becomes a bottom sheet ──────────────────── */
 
 @media (max-width: 1023px) {
+  /* One column below the console's existing breakpoint: a rail plus a stage does
+   * not fit, and the stage is the thing worth keeping whole. The pane scrolls
+   * again here, which is the right trade at this width. */
+  .review {
+    overflow-y: auto;
+  }
+
+  .review-workspace {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .review-frame {
+    max-height: 60vh;
+  }
+
   .workspace {
     position: relative;
   }
@@ -777,7 +807,13 @@ button:disabled {
 .dock-collapsed[hidden],
 .dock-scroll[hidden],
 .dock-readout[hidden],
-.provenance-note[hidden] {
+.provenance-note[hidden],
+/* Module switching relies on these three, and .map-container and .module-container
+ * both set a display of their own. Without restating it here, hiding the map would
+ * leave it rendering underneath the review module. */
+.map-container[hidden],
+.panel-container[hidden],
+.module-container[hidden] {
   display: none;
 }
 
@@ -1024,3 +1060,423 @@ button:disabled {
   color: var(--color-text-subtle);
   text-align: center;
 }
+
+/* ── Frame review (Phase 2.8) ─────────────────────────────────────────────────
+ * A new class name rather than a reskin of an existing one: organic-shell.css
+ * loads last and wins on equal specificity, so `.review-*` is safe from the skin
+ * and the skin is safe from this.
+ *
+ * The stage never uses `object-fit`. With `contain` the rendered content box stops
+ * matching the element box, and every normalized box coordinate would then be off
+ * by the letterbox. The stage shrink-wraps the image instead, so the image's
+ * bounding rect IS the coordinate space. */
+
+/* The pane itself does not scroll — the rail does. A scrolling page would put the
+ * verdict buttons below the fold again, which is the problem this layout exists to
+ * remove. */
+.review {
+  height: 100%;
+  overflow: hidden;
+  padding: var(--space-4);
+}
+
+/* Two columns: the photograph takes the pane, the controls take a fixed rail.
+ *
+ * --panel-width is the console's existing detail-column token, used instead of the
+ * magic 1100px the single-column version carried. Every other surface here sizes
+ * from a token. */
+.review-workspace {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--panel-width);
+  gap: var(--space-4);
+  min-height: 0;
+}
+
+/* Centred so the topline and the caption sit over and under the image rather than
+ * pinned to the far edge of a wide column, which read as two stray fragments with a
+ * void between them. */
+.review-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 0;
+  min-width: 0;
+}
+
+/* The rail is the only scroller, and it is the .dock-scroll pattern: flex child,
+ * min-height 0, overflow-y auto. */
+.review-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+
+.review-topline {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.review-counts {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.review-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 400;
+}
+
+.review-meta-sep {
+  color: var(--color-text-subtle);
+}
+
+.review-session {
+  font-size: var(--text-sm);
+  color: var(--color-accent-2-text);
+}
+
+.review-keys > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.review-progress {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.review-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.review-frame-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+/* Centres the stage in whatever space is left. A portrait frame in a landscape
+ * pane always leaves some horizontal room; balancing it reads as margin, where
+ * pinning it left read as a lopsided gap. */
+.review-stage-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: grid;
+  place-items: center;
+}
+
+/* The stage shrink-wraps the image so the stage box and the image's rendered box
+ * are the same rectangle. `line-height: 0` removes the inline descender gap that
+ * would otherwise make the stage a few pixels taller than the image and put every
+ * overlay box slightly off. */
+/* The stage carries the IMAGE'S OWN aspect ratio, set from naturalWidth/Height
+ * when the frame decodes, and then fills whatever space the pane gives it.
+ *
+ * This is how the image scales UP without object-fit. `max-width/max-height`
+ * alone only ever cap, so a 480x640 frame stayed 480x640 in an 816px-tall pane.
+ * `object-fit: contain` would scale it, but then the rendered content box stops
+ * matching the element box and every normalized overlay coordinate is off by the
+ * letterbox. Giving the element the image's ratio makes the two boxes identical
+ * by construction, so the overlay stays exact and there is nothing to letterbox. */
+.review-stage {
+  position: relative;
+  display: block;
+  line-height: 0;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--color-surface-sunken);
+}
+
+/* NO object-fit, deliberately: with `contain` the rendered content box stops
+ * matching the element box and every normalized coordinate is off by the letterbox. */
+/* Fills the pane instead of being capped at 68vh. The cap was the whole problem:
+ * with a PORTRAIT corpus it bound the image by height, so it could never exceed
+ * ~466px wide however wide the screen was, leaving 73% of the pane unreachable —
+ * while the chrome it shared the column with pushed the controls off the bottom.
+ *
+ * Still no object-fit: with `contain` the rendered content box stops matching the
+ * element box and every normalized overlay coordinate is off by the letterbox. */
+/* Fills the stage exactly. Safe because the stage has been given this image's own
+ * aspect ratio, so there is no distortion and no letterbox. */
+.review-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.review-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Class names over the image. A sibling DOM layer, not SVG <text>: the overlay uses
+ * preserveAspectRatio="none" so its x and y scales differ and any text inside is
+ * stretched. Positioned in percent, so it tracks the image through every resize
+ * with no JavaScript — the same property that makes the boxes themselves free. */
+.review-box-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.review-box-label {
+  position: absolute;
+  transform: translateY(-100%);
+  margin-top: -2px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  padding: 0 var(--space-1);
+  border-radius: 3px;
+  white-space: nowrap;
+  /* Its own contrast, independent of the photograph underneath: the label has to be
+   * readable over asphalt, sky and lane paint alike, and a translucent chip cannot
+   * promise that. */
+  color: #fff;
+  background: rgb(0 0 0 / 0.78);
+}
+
+.review-box-label-model {
+  font-style: italic;
+  opacity: 0.85;
+}
+
+.review-box {
+  fill: transparent;
+  stroke-width: 2;
+  /* Every coloured stroke carries a dark edge. The palette has to hold against
+   * asphalt AND against blown-out sky and white lane paint in the same frame, and
+   * a bright hue on a bright background is the case a hue alone cannot solve. */
+  filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.85));
+}
+
+/* The selection halo, drawn beneath the class-coloured stroke. */
+.review-box-halo {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 5;
+  filter: drop-shadow(0 0 2px rgb(0 0 0 / 0.9));
+}
+
+/* The human's own boxes: solid, coloured by CLASS.
+ *
+ * Class identity has to be visible on the image itself — five boxes in one colour
+ * make the class picker a promise the overlay does not keep. --color-primary is the
+ * fallback for a class_id outside the served list, which should not happen but
+ * should not render invisibly if it does. */
+.review-box-human {
+  stroke: var(--color-primary);
+  fill: color-mix(in oklab, var(--color-primary) 12%, transparent);
+}
+
+.review-box-c0 { stroke: var(--review-class-0); fill: color-mix(in oklab, var(--review-class-0) 12%, transparent); }
+.review-box-c1 { stroke: var(--review-class-1); fill: color-mix(in oklab, var(--review-class-1) 12%, transparent); }
+.review-box-c2 { stroke: var(--review-class-2); fill: color-mix(in oklab, var(--review-class-2) 12%, transparent); }
+.review-box-c3 { stroke: var(--review-class-3); fill: color-mix(in oklab, var(--review-class-3) 12%, transparent); }
+.review-box-c4 { stroke: var(--review-class-4); fill: color-mix(in oklab, var(--review-class-4) 12%, transparent); }
+
+/* The model's: dashed and neutral, so they can never be mistaken for a human box.
+ * Off by default and revealed with `b` — showing the labeller where the model looked
+ * before they have judged is the anchoring Phase 2.7b measured making the detector
+ * monotonically worse. */
+.review-box-model {
+  stroke: var(--severity-unknown);
+  stroke-dasharray: 6 4;
+}
+
+/* Selection has to win over the per-class stroke, and has to stay legible against
+ * all five of them and against any photograph. A white outer halo plus a thicker
+ * stroke reads on asphalt, on sky and on lane paint alike — recolouring the box
+ * would instead hide the one thing the box is there to communicate, its class. */
+.review-box.review-box.is-selected {
+  stroke-width: 3;
+}
+
+.review-legend {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.review-legend dt {
+  color: var(--color-text);
+}
+
+.review-legend dd {
+  margin: 0;
+}
+
+.review-note {
+  resize: vertical;
+  font-family: var(--font-ui);
+}
+
+/* ── Box mode ─────────────────────────────────────────────────────────────────
+ * The swatch carries class identity because five text labels in one colour are
+ * unreadable at a glance next to five differently-stroked boxes. It holds a
+ * `var()` in an inline style rather than a resolved hex, so a theme flip needs no
+ * re-render — unlike the map legend, which resolves through cssVar() and has to
+ * rebuild itself. */
+
+.review-class-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.review-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+  /* A real border, not a faint inset.
+   *
+   * These hues are tuned to sit on ROAD PHOTOGRAPHY, not on cream chrome — against
+   * the light canvas the yellow measures 1.20:1 and simply disappears as a shape.
+   * Retuning them for the chip would hurt the job they actually do, so the swatch
+   * gets a defined edge instead and the fill stays honest. The class name is always
+   * beside it, so the swatch is reinforcement rather than the sole signal. */
+  border: 1px solid var(--color-border-strong);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.35);
+}
+
+.review-class-chip kbd {
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+}
+
+.review-box-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.review-box-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.review-box-row:hover {
+  background: var(--color-surface-hover);
+}
+
+.review-box-row.is-selected {
+  background: var(--color-primary-subtle);
+}
+
+.review-box-row .icon-button {
+  margin-left: auto;
+}
+
+/* Off --severity-3. tokens.css reserves the severity ramp for ORDINAL severity, and
+ * a geometry advisory is not a severity — borrowing it was exactly the misreading
+ * that file warns about. Also measured 3.30:1 in light mode as inverse-on-severity.
+ * An outlined pill in the warning voice reads as advisory and inherits contrast. */
+.review-thin-flag {
+  font-size: var(--text-xs);
+  color: var(--color-warning);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+
+/* Box mode draws, so the stage takes a crosshair — the one affordance that says
+ * "drag here" without a label. */
+.review-stage[data-drawing='1'] {
+  cursor: crosshair;
+}
+
+/* ── Review status channel ────────────────────────────────────────────────────
+ * Three levels, not one. This used to be a single `.error-text[role=alert]`, so a
+ * successful submit rendered in danger red and was announced as an alert, and the
+ * thin-box advisory — "a warning, never a refusal" — read as a failure.
+ *
+ * Each level carries a glyph as well as a colour, because severity conveyed by
+ * colour alone is invisible to a colour-blind operator and to anyone reading a
+ * greyscale screenshot. */
+
+.review-status {
+  margin: 0;
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--text-sm);
+  min-height: 1em;
+}
+
+.review-status.is-ok { color: var(--color-success); }
+.review-status.is-warn { color: var(--color-warning); }
+.review-status.is-error { color: var(--color-danger); }
+
+/* The live region is for assistive tech only — the visible confirmation is the
+ * frame advancing and the status line above. Not `display: none`, which would
+ * remove it from the accessibility tree entirely. */
+.review-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.review-frame-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* Per-frame state that was previously tracked and never shown. */
+.review-flag {
+  font-size: var(--text-xs);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--space-2);
+  border: 1px solid currentColor;
+}
+
+.review-flag.is-error { color: var(--color-danger); }
+.review-flag.is-warn { color: var(--color-warning); }
