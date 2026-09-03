@@ -8,7 +8,11 @@
 -- exist from 001 — they were scaffolded empty for this phase. This migration
 -- only adds the indexes and the audit table that the clustering job needs.
 --
--- See docs/phases/phase-2.2-clustering-plan.md for the full design.
+-- See docs/phases/phase-2.2-clustering-plan.md for the original design -- but note
+-- that TWO of its decisions have since been replaced: ST_ClusterDBSCAN gave way to a
+-- two-stage Python assignment (it cannot buffer each event by its own GPS accuracy,
+-- and its chaining produced a 124 m "single pothole"), and cluster_min_points is now
+-- 1 rather than 3. docs/architecture/from-reading-to-defect.md describes what runs.
 -- ============================================================================
 
 -- ============================================================================

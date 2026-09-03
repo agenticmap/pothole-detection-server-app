@@ -1,8 +1,29 @@
+---
+updated: 2026-09-03
+---
+
 # Phase 2.2 — Crowd Clustering Job (As-Built)
 
-> Status: **Implemented.** Companion to [`docs/roadmap.md`](../roadmap.md) §2.5 and the
+> Status: **Implemented, and since SUPERSEDED in two places.** Companion to
+> [`docs/roadmap.md`](../roadmap.md) §2.5 and the
 > [`docs/phases/phase-2.1-fusion-engine-plan.md`](./phase-2.1-fusion-engine-plan.md) it follows.
 > This adds the spatial clustering job that was explicitly deferred from Phase 2.1.
+
+> ### ⚠️ Two things below are no longer true
+>
+> This document is kept as the record of the original design, but the live system differs:
+>
+> 1. **`ST_ClusterDBSCAN` is gone** (§4 below). It was replaced by a two-stage Python assignment
+>    in `app/fusion/service.py::_assign_members`, because DBSCAN takes one scalar `eps` for the
+>    whole window function — it cannot buffer each event by 2σ of its *own* GPS accuracy — and
+>    because it chains, which produced a "single pothole" spanning 124 m on real data.
+> 2. **`cluster_min_points` is 1, not 3.** At 25 m and a median 13 m/s, "three detections within
+>    25 m" is 1.9 seconds of travel — one drive-past, not corroboration — and it discarded 46% of
+>    admitted members as noise. Corroboration moved to the READ path, where it is
+>    `distinct_devices ≥ 2 OR distinct_passes ≥ 3`.
+>
+> For how the live system works, read
+> [`from-reading-to-defect.md`](../architecture/from-reading-to-defect.md).
 
 ## Context
 

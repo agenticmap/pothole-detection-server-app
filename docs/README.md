@@ -29,6 +29,7 @@ Design and rationale. Longer-lived than any single phase.
 | Doc | What it settles |
 |---|---|
 | [`enterprise-architecture-plan.md`](./architecture/enterprise-architecture-plan.md) | The platform strategy: mobile wire contract frozen at v1, portable PostGIS schema, generic asset model from day one. Also the Supabase-vs-self-hosted and dashboard-stack decisions. |
+| [`from-reading-to-defect.md`](./architecture/from-reading-to-defect.md) | **Start here for the numbers an operator reads.** Where `P(pothole)` and `Severity` come from, why the outlier gate rejects a confident pothole, how a cluster is actually formed — and why forming one is not the same as publishing it. Corrects two records that still describe `ST_ClusterDBSCAN` and `min_points = 3`. |
 | [`detection-approach.md`](./architecture/detection-approach.md) | Why server-side detection is a YOLO → VLM hybrid rather than one bigger model. |
 | [`detection-model-strategy.md`](./architecture/detection-model-strategy.md) | Models A/B/C — road damage, street furniture, road markings — and why only A may write `server_probability`. |
 
