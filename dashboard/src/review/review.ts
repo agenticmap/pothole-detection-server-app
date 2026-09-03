@@ -40,6 +40,7 @@ import {
   needsSave,
   progressLine,
   resolveJump,
+  resolveLanding,
   resolveMove,
   stateOf,
   submittableIds,
@@ -121,6 +122,8 @@ export class ReviewModule {
    */
   private navChain: Promise<void> = Promise.resolve();
   private navQueued = 0;
+  /** A frame id from the URL hash, honoured once on the next load. */
+  private pendingFrame: string | null = null;
 
   constructor(
     container: HTMLElement,
@@ -179,6 +182,10 @@ export class ReviewModule {
       maxScore: state.maxScore,
       seed: state.seed,
     };
+    // A deep link is a ONE-SHOT landing, not a filter. Held until the next load and
+    // cleared unconditionally there -- keeping it set would yank the operator back to
+    // this frame on every `r`, which is a filter pretending to be a link.
+    this.pendingFrame = state.frame;
   }
 
   urlState(): ReviewUrlState {
@@ -238,7 +245,18 @@ export class ReviewModule {
       if (controller.signal.aborted) return;
       this.meta = res;
       this.entries = res.items.map(toEntry);
-      this.cursor = 0;
+      const landing = resolveLanding(
+        this.entries.map((e) => e.item.client_id),
+        this.pendingFrame,
+      );
+      this.pendingFrame = null;
+      this.cursor = landing.cursor;
+      if (landing.missed) {
+        this.setStatus(
+          'warn',
+          'That frame is not in this queue — showing the first one. Widen the band or clear it.',
+        );
+      }
       this.note = '';
       this.render();
       this.restoreFocus(focus);

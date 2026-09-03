@@ -15,6 +15,7 @@ import {
 // Side-effect import: must run before any Map is constructed. See worker.ts.
 import './worker.ts';
 import { basemapStyle } from './basemap.ts';
+import { frameFacts, frameStatus } from './frame-facts.ts';
 import {
   BASE_INDIVIDUAL_FILTER,
   FRAMES_MAX_ZOOM,
@@ -606,66 +607,18 @@ function observationPopupContent(props: Record<string, unknown>): HTMLElement {
  * to any cluster, and no arrangement of the score alone says so.
  */
 function framePopupContent(props: Record<string, unknown>): HTMLElement {
-  const rows: Array<[string, string]> = [];
-
-  const num = (v: unknown, digits: number): string | null =>
-    typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : null;
-
-  const detected = props['detected'] === true;
-  const paired = props['paired'] === true;
-
-  const serverP = num(props['server_probability'], 3);
-  rows.push(['Server p', serverP ?? 'not scored']);
-
-  const deviceP = num(props['device_probability'], 3);
-  if (deviceP !== null) rows.push(['On-device p', deviceP]);
-
-  const model = props['server_model_id'];
-  if (typeof model === 'string' && model) rows.push(['Model', model]);
-
-  const boxes = props['server_box_count'];
-  if (typeof boxes === 'number') rows.push(['Boxes found', String(boxes)]);
-
-  const fused = num(props['fused_confidence'], 3);
-  if (fused !== null) {
-    rows.push(['Fused confidence', props['is_primary'] === true ? `${fused} (primary)` : fused]);
-  }
-
-  const ts = props['ts_epoch'];
-  if (typeof ts === 'number') {
-    rows.push(['Captured', new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z']);
-  }
-
-  const known = new Set([
-    'client_id', 'device_probability', 'server_probability', 'server_model_id',
-    'server_box_count', 'detected', 'paired', 'is_primary', 'fused_confidence', 'ts_epoch',
-  ]);
-  for (const [key, value] of Object.entries(props)) {
-    if (!known.has(key)) rows.push([key, String(value)]);
-  }
-
-  let status: string;
-  let severe = false;
-  if (!detected) {
-    status = 'Not yet scored — the detection worker has not reached this frame.';
-    severe = true;
-  } else if (!paired) {
-    status = 'Scored but unpaired — no sensor event matched, so it reached no cluster.';
-    severe = true;
-  } else {
-    status = 'Paired with a sensor event and fused.';
-  }
+  const status = frameStatus(props);
 
   const dl = el('dl', { class: 'observation-popup-grid' });
-  for (const [term, value] of rows) {
+  for (const [term, value] of frameFacts(props)) {
     dl.append(el('dt', { text: term }), el('dd', { text: value }));
   }
 
   return el('div', {}, [
     el('h3', { class: 'observation-popup-title', text: 'Camera frame' }),
     el('p', {
-      class: severe ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
-      text: status,
+      class: status.severe ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
+      text: status.text,
     }),
     dl,
     el('p', {

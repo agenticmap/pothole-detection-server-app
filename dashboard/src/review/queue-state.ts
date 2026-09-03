@@ -179,6 +179,28 @@ export function resolveMove(
   };
 }
 
+/**
+ * Where a deep link lands.
+ *
+ * `urlState()` has always emitted `frame`, `shell.ts` has always written it into the
+ * hash and parsed it back, and `applyUrlState` silently dropped it -- so a shared
+ * "look at this frame" link landed the colleague on frame 1 of the band and
+ * `shell.ts`'s own comment about sending someone one frame was aspirational.
+ *
+ * `missed` is returned rather than swallowed: the id may be real but outside the
+ * current band or mode, and an operator who followed a link to a specific frame needs
+ * to be told they are not looking at it. Silently showing frame 1 is the failure that
+ * looks like success.
+ */
+export function resolveLanding(
+  ids: readonly string[],
+  want: string | null,
+): { cursor: number; missed: boolean } {
+  if (want === null) return { cursor: 0, missed: false };
+  const at = ids.indexOf(want);
+  return at === -1 ? { cursor: 0, missed: true } : { cursor: at, missed: false };
+}
+
 /** Home / End: a jump crosses frames it never displayed, so it records none of them. */
 export function resolveJump(to: 'start' | 'end', length: number, mode: Mode): MoveResult {
   return {

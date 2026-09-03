@@ -19,6 +19,7 @@ import {
   needsSave,
   progressLine,
   resolveJump,
+  resolveLanding,
   resolveMove,
   type ReviewFrame,
   stateOf,
@@ -348,5 +349,30 @@ describe('the box-mode transition table', () => {
     const e = toEntry(frame({ client_id: 'a', label: 0, boxes_drafted_at: NOW, human_boxes: [] }));
     expect(e.boxes).toEqual([]);
     expect(submittableIds([e])).toEqual(['a']);
+  });
+});
+
+describe('resolveLanding', () => {
+  it('lands on the requested frame', () => {
+    expect(resolveLanding(['a', 'b', 'c'], 'b')).toEqual({ cursor: 1, missed: false });
+  });
+
+  it('reports a miss rather than silently showing the first frame', () => {
+    // The id may be real but outside the current band or mode. An operator who
+    // followed a link to one frame has to be told they are not looking at it --
+    // silently landing on frame 1 is the failure that looks like success.
+    expect(resolveLanding(['a'], 'zz')).toEqual({ cursor: 0, missed: true });
+  });
+
+  it('does not raise the warning on a plain load', () => {
+    expect(resolveLanding(['a', 'b'], null)).toEqual({ cursor: 0, missed: false });
+  });
+
+  it('reports a miss against an empty queue', () => {
+    expect(resolveLanding([], 'a')).toEqual({ cursor: 0, missed: true });
+  });
+
+  it('does not warn when an empty queue was not asked for a frame', () => {
+    expect(resolveLanding([], null)).toEqual({ cursor: 0, missed: false });
   });
 });

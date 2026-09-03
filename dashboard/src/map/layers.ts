@@ -264,9 +264,18 @@ const IS_PAIRED: ExpressionSpecification = ['coalesce', ['get', 'paired'], false
  * Unscored frames are grey and small rather than hidden: the detection backlog is
  * exactly the kind of thing this layer is well placed to surface.
  */
-export function framesLayer(): CircleLayerSpecification {
-  const scored = cssVar('--color-accent-2');
-  const unscored = cssVar('--severity-unknown');
+export function framesLayer(
+  // Injectable so the expression structure can be asserted without a DOM: cssVar()
+  // reads getComputedStyle(document.documentElement), and the suite is deliberately
+  // node-environment with no jsdom. The default is exactly the previous behaviour, so
+  // no call site changes. MapLibre has no notion of var(), which is the one place in
+  // this codebase where resolving a colour into JS is correct.
+  colors: { scored: string; unscored: string } = {
+    scored: cssVar('--color-accent-2'),
+    unscored: cssVar('--severity-unknown'),
+  },
+): CircleLayerSpecification {
+  const { scored, unscored } = colors;
   const probability: ExpressionSpecification = ['coalesce', ['get', 'server_probability'], 0];
   return {
     id: LAYER_FRAMES,

@@ -224,6 +224,23 @@
   --color-text: #f9f4ed;
   --color-text-inverse: #2e2b25;
 
+  /* THIS TOKEN HAD NO DARK VALUE. --color-text-subtle was tuned in the light theme
+   * (#6e6659, a dark warm brown) and inherited straight into the dark theme, where it
+   * measures 2.49:1 on the canvas, 2.15:1 on a surface and 2.35:1 on a sunken panel.
+   * Twenty-six rules in styles.css consume it -- .empty-note, .field-label,
+   * .action-status, the dock group titles, the legend, the frame captions -- so every
+   * secondary label in the console was effectively unreadable in dark mode.
+   *
+   * Exactly the same failure as --color-danger, which was defined once and inherited
+   * its light value into dark at 1.56:1. A token that appears in only one theme block
+   * is the recurring shape of this bug; --color-text-muted got it right by going
+   * through var(--ramp-neutral-700), which each block redefines.
+   *
+   * #aba191 measures 5.53 / 4.77 / 5.22 on canvas / surface / sunken, and stays well
+   * below --color-text-muted's 7.19 on surface -- the two tokens have to remain a
+   * visible step apart, which is the whole distinction they exist to make. */
+  --color-text-subtle: #aba191;
+
   --color-primary: var(--ramp-accent-400);
   --color-primary-hover: var(--ramp-accent-300);
   --color-primary-subtle: color-mix(in srgb, #f6a06b 18%, transparent);
