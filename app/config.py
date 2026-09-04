@@ -192,6 +192,21 @@ class Settings(BaseSettings):
     # again would re-hide the same 46% rather than add any corroboration; measure
     # with `python scripts/crowd_sweep.py --sweep` before changing it.
     cluster_min_points: int = 1
+    # Owner stamped on clusters the job creates. UNSET IS THE SAFE DEFAULT and the
+    # correct one for any deployment serving more than one municipality.
+    #
+    # migrations/009 added asset_cluster.org_id and deliberately left every row NULL:
+    # there is no boundary table to assign by geography and no device→org mapping, so
+    # the server cannot infer an owner, and "picking a default org would assert
+    # ownership that is not real the moment a second municipality exists". NULL means
+    # unowned, which repair_service permits only an 'admin' to touch.
+    #
+    # That is correct and it is also why a `staff` operator could not mark ANY real
+    # detection repaired: the clustering job owns every cluster in the database and
+    # stamped none of them. A single-city deployment can say who it is here, which
+    # restores the ordinary `owner == caller's org` path without weakening the
+    # cross-org guard for anyone else. The job never overwrites an existing owner.
+    cluster_owner_org_id: str | None = None
     cluster_window_days: int = 30                  # only members seen in last N days
     cluster_member_min_confidence: float = 0.5     # fused_confidence floor for pair members
     cluster_min_distinct_devices: int = 2          # below this → not public (read-path filter)

@@ -62,16 +62,15 @@ Where you cannot do something, the console tells you rather than showing a contr
 detail panel says *"Marking repairs requires the staff role."* and review says *"Read-only:
 recording a verdict needs the staff role."*
 
-> ### ⚠️ Marking repairs currently needs `admin`, not `staff`
+> ### Repairs need the defect to have an owner
 >
-> Defects are owned by an organisation, and repairing an **unowned** defect requires `admin`. The
-> clustering job does not currently assign an owner, so **every defect the pipeline produces is
-> unowned** and a `staff` account cannot repair any of them.
+> Defects belong to an organisation, and repairing an **unowned** one requires `admin`. The server
+> cannot work out who owns a defect on its own — it has no map of municipal boundaries — so a
+> deployment names itself with `CLUSTER_OWNER_ORG_ID`.
 >
-> When this bites, the message you get is *"Your account no longer has permission to do that"*,
-> which misdescribes the cause — your account is fine. Use an `admin` account until this is fixed.
-> Recorded in
-> [`phase-2.11-console-legibility.md`](../phases/phase-2.11-console-legibility.md).
+> If your `staff` account gets *"Your account no longer has permission to do that"* on **every**
+> defect, that setting is missing: your account is fine, the defects have no owner. Whoever runs the
+> server needs to set it and run `scripts/assign_cluster_org.py` once for the existing backlog.
 
 ---
 
@@ -427,7 +426,7 @@ read [`from-reading-to-defect.md`](../architecture/from-reading-to-defect.md).
 | The map is empty | Three separate causes: you are below zoom 13 (banner says so); the starting view is configured and may point somewhere with no data; or the map failed to load its worker, in which case **nothing** vector renders. |
 | I ticked a raw-detection box and nothing appeared | Those layers need **zoom 15+**. Zoom in — they will not appear on their own. |
 | All the filters are greyed out | You are at zoom 12 or below. Grouped markers carry no severity or device count. |
-| **Mark repaired** fails with a permission error | Almost certainly the unowned-defect rule at the top of this guide — you need `admin`, not `staff`. It is not that your account changed. |
+| **Mark repaired** fails with a permission error | If it fails on *every* defect, the deployment has not set `CLUSTER_OWNER_ORG_ID` — the defects have no owner, and unowned takes an `admin`. If it fails on *one*, that defect belongs to another organisation. Either way your account has not changed. |
 | A photograph is on its side | An old app build. Press `t` in review, or **Turn 90°** in the viewer. |
 | `Server p` is `0.000` | The detector looked and found nothing. Not the same as unscored, which says *not yet scored*. |
 | The change indicators are all dashes, and street search is disabled | Both honest blanks with tooltips explaining why. No month-ago baseline exists; no street names exist. |

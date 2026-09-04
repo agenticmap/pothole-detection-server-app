@@ -826,7 +826,12 @@ UPDATE asset_cluster SET
     severity = $4, confidence = $5, observation_count = $6,
     distinct_devices = $7, last_seen = $8, updated_at = now(),
     bearing_deg = $9, class_probs = $10::jsonb,
-    distinct_passes = $11, member_span_s = $12
+    distinct_passes = $11, member_span_s = $12,
+    -- COALESCE, never assignment: a cluster that already has an owner keeps it,
+    -- whatever the config now says. This only fills the NULLs migrations/009 left,
+    -- so re-pointing cluster_owner_org_id cannot silently transfer a city's
+    -- backlog to another org.
+    org_id = COALESCE(asset_cluster.org_id, $13)
 WHERE cluster_id = $1
 """
 
@@ -834,10 +839,10 @@ _INSERT_CLUSTER_SQL = """
 INSERT INTO asset_cluster (
     cluster_id, asset_type, centroid, severity, confidence,
     observation_count, distinct_devices, last_seen, source,
-    bearing_deg, class_probs, distinct_passes, member_span_s
+    bearing_deg, class_probs, distinct_passes, member_span_s, org_id
 )
 VALUES ($1, 'pothole', ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
-        $4, $5, $6, $7, $8, 'crowd', $9, $10::jsonb, $11, $12)
+        $4, $5, $6, $7, $8, 'crowd', $9, $10::jsonb, $11, $12, $13)
 """
 
 _DELETE_LINKS_SQL = "DELETE FROM observation_cluster_link WHERE cluster_id = $1"
@@ -1385,6 +1390,25 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                     n_members,
                 )
 
+                # Resolved once per run, not per cluster. A configured org that does
+                # not exist would fail asset_cluster's FK on every insert and take
+                # the whole clustering job down with it, so verify and fall back to
+                # unowned — which is the pre-existing behaviour and safe, rather than
+                # a pipeline that stops producing defects because of a typo.
+                owner_org_id = settings.cluster_owner_org_id or None
+                if owner_org_id is not None:
+                    known = await conn.fetchval(
+                        "SELECT 1 FROM org WHERE org_id = $1", owner_org_id
+                    )
+                    if known is None:
+                        logger.error(
+                            "CLUSTER_OWNER_ORG_ID=%r does not exist in org; leaving new "
+                            "clusters unowned (admin-only to repair). Create the org or "
+                            "correct the setting.",
+                            owner_org_id,
+                        )
+                        owner_org_id = None
+
                 legacy_fallbacks = 0
                 for c in clusters:
                     lon, lat = float(c["centroid_lon"]), float(c["centroid_lat"])
@@ -1417,6 +1441,7 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                             c["distinct_devices"], c["last_seen"],
                             c["bearing_deg"], class_probs,
                             c["distinct_passes"], c["member_span_s"],
+                            owner_org_id,
                         )
                     else:
                         # Re-check for a repair that landed while this run was
@@ -1439,6 +1464,7 @@ async def run_cluster_job(pool: asyncpg.Pool) -> int:
                             c["distinct_devices"], c["last_seen"],
                             c["bearing_deg"], class_probs,
                             c["distinct_passes"], c["member_span_s"],
+                            owner_org_id,
                         )
                     matched.append(cluster_id)
 

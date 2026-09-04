@@ -311,6 +311,43 @@ hollow ring); the panel had not.
   it used to render *"All observations within 0 s"* for a cluster with **one** observation — a claim
   about a set of one, shown on 163 of 204 clusters. It now says it is one reading on one pass.
 
+## 8. Giving clusters an owner, so `staff` can repair
+
+Found while writing the user guide and left unpatched for two rounds: **a `staff` account could not
+mark any real detection repaired.** Every cluster the pipeline produces had `org_id IS NULL`, and
+`repair_service` permits only an `admin` to repair an unowned cluster, so the 403 hit 100% of the
+corpus — surfacing as *"Your account no longer has permission to do that"*, which misdescribes the
+cause entirely.
+
+**The cause was a deliberate refusal, not an oversight.** `migrations/009` added
+`asset_cluster.org_id` and backfilled nothing, saying why: there is no municipal boundary table to
+assign by geography, and *"picking a default org would assert ownership that is not real the moment
+a second municipality exists"*. Confirmed still true — `org_id` exists on `asset_cluster`, `org`,
+`org_member` and `repair_log` and **nowhere else**, so there is no device→org mapping either. The
+server genuinely cannot infer an owner.
+
+**So the fix is to let a deployment declare one, not to weaken the guard.** `CLUSTER_OWNER_ORG_ID`
+is unset by default — unchanged, fail-closed behaviour — and a single-city deployment names itself.
+The clustering job then stamps clusters it creates and fills NULLs on clusters it updates, via
+`org_id = COALESCE(asset_cluster.org_id, $13)` so an existing owner is **never** reassigned:
+re-pointing the setting cannot transfer one city's backlog to another.
+`scripts/assign_cluster_org.py` handles the existing rows, dry-run by default.
+
+**`repair_service.py` was not touched.** The cross-org guard is exactly as migration 009 left it —
+an owned cluster is repairable by its org, an unowned one still takes an admin. The clusters simply
+have owners now, so `staff` takes the ordinary `owner == caller's org` path. Fixing the data rather
+than the rule is what keeps the multi-tenant property, and it makes `repair_log.org_id` mean
+something for the first time.
+
+One safety detail worth its own test: a misconfigured org id would fail `asset_cluster`'s foreign
+key on **every** insert and take the whole clustering job down. The job resolves the owner once per
+run, logs an error if the org does not exist, and falls back to unowned — which is precisely the
+pre-existing behaviour, so a typo costs repairs rather than the pipeline.
+
+Six tests pin it: unowned by default, stamped when configured, **never reassigned**, an unknown org
+degrades instead of failing, `staff` can repair an owned cluster end to end, and another org's staff
+still cannot.
+
 ---
 
 ## Verification
@@ -333,11 +370,9 @@ unauthenticated, `paired_observation_id` is nullable in the OpenAPI schema, `jpe
 
 ## What this leaves
 
-1. **A `staff` account cannot mark any real detection repaired.** Every cluster the pipeline
-   produces has `org_id IS NULL`, and `repair_service.py` requires `admin` for an unowned cluster.
-   The 403 surfaces as *"Your account no longer has permission to do that"*, which misdescribes the
-   cause. Found while writing the user guide; documented there and here, not patched — it is a
-   behaviour change and wants its own round.
+1. ~~**A `staff` account cannot mark any real detection repaired.**~~ **Fixed in §8** —
+   `CLUSTER_OWNER_ORG_ID` lets a deployment declare its own org, so clusters have an owner and
+   `staff` takes the ordinary path. `repair_service.py` is unchanged.
 2. **The 1,819-frame seam is still unlabelled.** Unchanged from 2.10, and still the only untried
    remedy using exactly-in-domain data.
 3. **A v2 holdout allow-list is still mandatory before any retrain on seam labels.** Still not

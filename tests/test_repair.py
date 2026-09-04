@@ -13,6 +13,7 @@ Two of these guard behaviour that is easy to break and silent when broken:
 import pytest
 
 import app.fusion.service as fusion_service
+from app.config import settings
 from app.fusion.service import run_cluster_job
 from tests.conftest import insert_observation
 from tests.test_tiles import auth, tile_of
@@ -446,14 +447,17 @@ class TestRepairOrgScoping:
             assert await conn.fetchval("SELECT count(*) FROM repair_log") == 0
 
     async def test_job_created_cluster_is_admin_only(self, client, db_pool):
-        """The live consequence of not backfilling org_id, stated outright.
+        """With no owner configured, a job-created cluster is still admin-only.
 
-        The clustering job sets no org_id, so every cluster the pipeline produces
-        is unowned and a plain `staff` operator cannot close it out -- which is
-        the normal operator workflow. Fail-closed was the deliberate choice over
-        asserting ownership nobody had established, but until the job learns to
-        assign an owner, repair is effectively an admin action. Recorded as a
-        test so the limitation cannot be forgotten.
+        Fail-closed is the deliberate choice over asserting ownership nobody has
+        established, and it remains the default: with CLUSTER_OWNER_ORG_ID unset
+        the job stamps nothing, the cluster is unowned, and a plain `staff`
+        operator gets a 403.
+
+        This used to be the whole story, and it meant `staff` could not close out
+        ANY real detection. A single-city deployment now names itself -- see
+        test_configured_owner_lets_staff_repair below, which is the same scenario
+        with the setting present.
         """
         async with db_pool.acquire() as conn:
             await _make_staff(conn, org_id=CALLER_ORG, role="staff")
@@ -476,6 +480,79 @@ class TestRepairOrgScoping:
             assert await conn.fetchval(
                 "SELECT org_id FROM asset_cluster WHERE cluster_id = $1", cluster_id
             ) is None
+
+        resp = await client.post(
+            f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth()
+        )
+        assert resp.status_code == 403
+
+    async def test_configured_owner_lets_staff_repair(self, client, db_pool, monkeypatch):
+        """The fix, end to end: the ordinary operator workflow works again.
+
+        Nothing in repair_service changed -- the cross-org guard is untouched and
+        an unowned cluster still takes an admin. The cluster simply has an owner
+        now, so `staff` takes the ordinary `owner == caller's org` path.
+        """
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="staff")
+            for i in range(4):
+                cid = f"owned-obs-{i}"
+                await insert_observation(
+                    conn, cid, device_id=f"dev-{i % 2}", lat=LAT, lon=LON,
+                    ts="2026-05-27T10:30:00+00:00",
+                )
+                await conn.execute(
+                    "UPDATE asset_observation SET sensor_class = 'pothole', "
+                    "sensor_p_pothole = 0.9, sensor_severity = 0.5, "
+                    "sensor_is_outlier = FALSE WHERE client_id = $1",
+                    cid,
+                )
+        monkeypatch.setattr(settings, "cluster_owner_org_id", CALLER_ORG)
+        assert await run_cluster_job(db_pool) == 1
+
+        async with db_pool.acquire() as conn:
+            cluster_id = await conn.fetchval("SELECT cluster_id FROM asset_cluster")
+            assert await conn.fetchval(
+                "SELECT org_id FROM asset_cluster WHERE cluster_id = $1", cluster_id
+            ) == CALLER_ORG
+
+        resp = await client.post(
+            f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth()
+        )
+        assert resp.status_code == 200
+        assert resp.json()["repaired_at"] is not None
+
+    async def test_another_orgs_staff_still_cannot_repair_an_owned_cluster(
+        self, client, db_pool, monkeypatch
+    ):
+        """The guard that migration 009 exists for, still holding after the fix.
+
+        Assigning an owner must not become a way to hand every city's backlog to
+        whoever asks -- an owned cluster is repairable by ITS org and nobody else.
+        """
+        async with db_pool.acquire() as conn:
+            await _make_staff(conn, org_id=CALLER_ORG, role="staff")
+            await conn.execute(
+                "INSERT INTO org (org_id, name) VALUES ('org_elsewhere', 'Elsewhere') "
+                "ON CONFLICT DO NOTHING"
+            )
+            for i in range(4):
+                cid = f"other-obs-{i}"
+                await insert_observation(
+                    conn, cid, device_id=f"dev-{i % 2}", lat=LAT, lon=LON,
+                    ts="2026-05-27T10:30:00+00:00",
+                )
+                await conn.execute(
+                    "UPDATE asset_observation SET sensor_class = 'pothole', "
+                    "sensor_p_pothole = 0.9, sensor_severity = 0.5, "
+                    "sensor_is_outlier = FALSE WHERE client_id = $1",
+                    cid,
+                )
+        monkeypatch.setattr(settings, "cluster_owner_org_id", "org_elsewhere")
+        assert await run_cluster_job(db_pool) == 1
+
+        async with db_pool.acquire() as conn:
+            cluster_id = await conn.fetchval("SELECT cluster_id FROM asset_cluster")
 
         resp = await client.post(
             f"/api/v1/clusters/{cluster_id}/repair", json={"repaired": True}, headers=auth()

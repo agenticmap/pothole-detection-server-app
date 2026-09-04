@@ -921,3 +921,77 @@ async def test_adaptive_radius_can_be_switched_off(db_pool, monkeypatch):
         )
     # 2 sigma would be 2 m and split these; the flat 25 m merges them.
     assert await run_cluster_job(db_pool) == 1
+
+
+# ── Cluster ownership (CLUSTER_OWNER_ORG_ID) ─────────────────────────────────
+#
+# migrations/009 left every asset_cluster.org_id NULL, and repair_service permits
+# only an 'admin' to repair an unowned cluster. Since the clustering job creates
+# every cluster in the database and stamped none of them, a `staff` operator could
+# not mark any real detection repaired. These pin the fix, including the part that
+# matters most: it must never move a cluster that already has an owner.
+
+
+async def test_clusters_are_unowned_when_no_owner_is_configured(db_pool):
+    """The default, and the correct one for a multi-municipality deployment."""
+    async with db_pool.acquire() as conn:
+        await _insert_pothole(conn, "p1")
+
+    await run_cluster_job(db_pool)
+
+    async with db_pool.acquire() as conn:
+        assert await conn.fetchval("SELECT org_id FROM asset_cluster") is None
+
+
+async def test_configured_owner_is_stamped_on_new_clusters(db_pool, monkeypatch):
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO org (org_id, name) VALUES ('org_own', 'Owner City') "
+            "ON CONFLICT DO NOTHING"
+        )
+        await _insert_pothole(conn, "p1")
+    monkeypatch.setattr(settings, "cluster_owner_org_id", "org_own")
+
+    await run_cluster_job(db_pool)
+
+    async with db_pool.acquire() as conn:
+        assert await conn.fetchval("SELECT org_id FROM asset_cluster") == "org_own"
+
+
+async def test_an_existing_owner_is_never_reassigned(db_pool, monkeypatch):
+    """Re-pointing the setting must not transfer one city's backlog to another."""
+    async with db_pool.acquire() as conn:
+        for org in ("org_first", "org_second"):
+            await conn.execute(
+                "INSERT INTO org (org_id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING", org
+            )
+        await _insert_pothole(conn, "p1")
+
+    monkeypatch.setattr(settings, "cluster_owner_org_id", "org_first")
+    await run_cluster_job(db_pool)
+
+    # A second pass over the same members updates the cluster in place.
+    monkeypatch.setattr(settings, "cluster_owner_org_id", "org_second")
+    await run_cluster_job(db_pool)
+
+    async with db_pool.acquire() as conn:
+        assert await conn.fetchval("SELECT org_id FROM asset_cluster") == "org_first"
+
+
+async def test_an_unknown_owner_leaves_clusters_unowned_rather_than_failing(
+    db_pool, monkeypatch
+):
+    """A typo must not stop the pipeline producing defects.
+
+    The FK would reject every insert, so without the pre-flight check the whole
+    clustering job dies on a misconfigured string. Unowned is the safe fallback:
+    it is exactly the pre-existing behaviour.
+    """
+    async with db_pool.acquire() as conn:
+        await _insert_pothole(conn, "p1")
+    monkeypatch.setattr(settings, "cluster_owner_org_id", "org_does_not_exist")
+
+    assert await run_cluster_job(db_pool) == 1
+
+    async with db_pool.acquire() as conn:
+        assert await conn.fetchval("SELECT org_id FROM asset_cluster") is None
