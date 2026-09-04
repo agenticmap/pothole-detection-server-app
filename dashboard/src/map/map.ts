@@ -17,6 +17,7 @@ import './worker.ts';
 import { basemapStyle } from './basemap.ts';
 import { frameFacts, frameStatus } from './frame-facts.ts';
 import { framePreviewUrl, IDLE, type PreviewState, reducePreview } from './frame-preview.ts';
+import { needsPan, popupPanOffset } from './popup-fit.ts';
 import {
   BASE_INDIVIDUAL_FILTER,
   FRAMES_MAX_ZOOM,
@@ -35,6 +36,7 @@ import {
   aggregateLayer,
   framesLayer,
   individualLayer,
+  observationClassFilter,
   observationsLayer,
 } from './layers.ts';
 import { registerMarkerIcons } from './marker-icons.ts';
@@ -104,6 +106,11 @@ export class PotholeMap {
    * than what corroborated.
    */
   private observationsVisible = false;
+  /**
+   * Which sensor classes the observations layer draws. Defaults to the dock's own
+   * default so the two cannot disagree before the first onFilterChange arrives.
+   */
+  private observationClasses: ReadonlySet<string> = new Set(['pothole']);
   /** Same reasoning as observationsVisible: 5,615 frames would bury 24 clusters. */
   private framesVisible = false;
   /** Reused rather than constructed per click, so only one can ever be open. */
@@ -194,6 +201,7 @@ export class PotholeMap {
         .setLngLat(e.lngLat)
         .setDOMContent(observationPopupContent(feature.properties ?? {}))
         .addTo(this.map);
+      this.fitPopupIntoView(this.observationPopup);
     });
 
     this.map.on('mouseenter', LAYER_OBSERVATIONS, () => {
@@ -211,8 +219,13 @@ export class PotholeMap {
         onOpenFullSize: (id) => this.options.onOpenFrame?.(id),
       });
       this.framePopup.setLngLat(e.lngLat).setDOMContent(node).addTo(this.map);
+      // Safe to measure before the image arrives: the preview box is a reserved,
+      // fixed-size placeholder, so the popup's height does not change on decode.
+      this.fitPopupIntoView(this.framePopup);
       void this.loadPreview(props, node);
     });
+
+    // (see fitPopupIntoView below for why an open popup pans the map)
 
     // Abort and revoke here rather than at each call site: `close` fires for the ✕,
     // for closeOnClick, and for a programmatic close alike, so this is the one place
@@ -341,6 +354,11 @@ export class PotholeMap {
       'visibility',
       this.observationsVisible ? 'visible' : 'none',
     );
+    // Re-apply the class filter for the same reason visibility is re-applied: this
+    // runs after every setStyle, and the layer is created here rather than at
+    // construction — so a filter set while it did not exist was silently dropped,
+    // and every class rendered regardless of the chips.
+    this.applyObservationFilter();
     this.map.setLayoutProperty(
       LAYER_FRAMES,
       'visibility',
@@ -404,6 +422,35 @@ export class PotholeMap {
    * time means concurrency is 1 by construction, which matters because the image
    * route is behind a Semaphore(6) shared across every user.
    */
+  /**
+   * Show only the selected sensor classes on the observations layer.
+   *
+   * 94.6% of readings are `crack` or `not`, and **none of either can ever reach a
+   * cluster** — the member gate admits pothole-classed readings only. Showing all of
+   * them by default buried the 254 that fed something under 5,432 that could not.
+   *
+   * Client-side for the same reason the severity chips are: a chip that costs a round
+   * trip stops feeling like a filter. The tile deliberately keeps serving every class,
+   * so the classifier stays auditable from the map.
+   */
+  setObservationFilter(selected: ReadonlySet<string>): void {
+    // Held as state, not just pushed at the layer: the layer is (re)created in
+    // addClusterLayers, so a filter applied while it does not exist would vanish.
+    this.observationClasses = new Set(selected);
+    this.applyObservationFilter();
+  }
+
+  private applyObservationFilter(): void {
+    if (!this.map.getLayer(LAYER_OBSERVATIONS)) return;
+    const filter = observationClassFilter(this.observationClasses);
+    this.map.setFilter(LAYER_OBSERVATIONS, (filter as FilterSpecification) ?? null);
+  }
+
+  /** Keep an open popup inside the map pane. See fitPopupIntoViewImpl. */
+  private fitPopupIntoView(popup: Popup): void {
+    fitPopupIntoViewImpl(this.map, popup);
+  }
+
   private async loadPreview(props: Record<string, unknown>, node: HTMLElement): Promise<void> {
     const url = framePreviewUrl(props['client_id']);
     const img = node.querySelector<HTMLImageElement>('.frame-popup-img');
@@ -676,6 +723,8 @@ function observationPopupContent(props: Record<string, unknown>): HTMLElement {
   const known = new Set([
     'client_id', 'sensor_class', 'sensor_p_pothole', 'sensor_severity',
     'sensor_is_outlier', 'speed_mps', 'accuracy_m', 'ts_epoch',
+    // Rendered as the membership sentence above, not as raw rows.
+    'in_cluster', 'cluster_id',
   ]);
   for (const [key, value] of Object.entries(props)) {
     if (!known.has(key)) rows.push([key, String(value)]);
@@ -686,17 +735,36 @@ function observationPopupContent(props: Record<string, unknown>): HTMLElement {
     dl.append(el('dt', { text: term }), el('dd', { text: value }));
   }
 
+  // Two facts that were previously merged into one sentence, wrongly.
+  //
+  // Membership leads, because it is what the marker's fill now shows and what the
+  // operator is actually asking. The old text said an outlier was "excluded from
+  // clustering", which is false for 25 readings in the corpus: the member gate has
+  // a second path (a camera frame at fused_confidence >= 0.5) that does not care
+  // about the flag.
+  const inCluster = props['in_cluster'] === true;
+  const clusterId = typeof props['cluster_id'] === 'string' ? props['cluster_id'] : null;
+  const membership = inCluster
+    ? clusterId
+      ? `Fed defect ${clusterId}.`
+      : 'Fed a defect.'
+    : 'Fed no defect — this reading reached no cluster.';
+
   return el('div', {}, [
     el('h3', { class: 'observation-popup-title', text: 'Raw observation' }),
-    // The outlier flag is the reason this layer is inspectable at all: it is
-    // what the cluster member gate silently drops. Stated as a sentence rather
-    // than a true/false row, because "sensor_is_outlier: true" does not tell an
-    // operator that the reading was excluded from clustering.
     el('p', {
-      class: outlier ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
+      class: inCluster ? 'observation-popup-flag' : 'observation-popup-flag is-outlier',
+      text: membership,
+    }),
+    // The outlier flag is a statement about the CONDITIONS the reading was taken
+    // in — the gate sees only accel_std and speed_mps, never the class or
+    // P(pothole). Saying so plainly, because "outlier" is otherwise read as "only
+    // seen once", which is corroboration: a different mechanism entirely.
+    el('p', {
+      class: 'observation-popup-flag',
       text: outlier
-        ? 'Rejected by the outlier gate — excluded from clustering.'
-        : 'Passed the outlier gate.',
+        ? 'Outlier: unusual measurement conditions (speed or road noise), not how often it was seen.'
+        : 'Ordinary measurement conditions.',
     }),
     dl,
     el('p', {
@@ -713,6 +781,30 @@ function observationPopupContent(props: Record<string, unknown>): HTMLElement {
  * observation. A frame scoring 0.9 that paired with nothing contributed nothing
  * to any cluster, and no arrangement of the score alone says so.
  */
+/**
+ * Pan so a just-opened popup is fully inside the map.
+ *
+ * MapLibre chooses the anchor with more room but never repositions afterwards, so a
+ * tall popup is simply clipped by the map's edge — measured at 544px of frame popup
+ * against 702px of map, overhanging the bottom by 68px and cutting the "Open full
+ * size" button in half.
+ *
+ * Deferred a frame because a popup has no measurable size until it has been laid
+ * out, and `duration: 0` because this corrects the operator's own click rather than
+ * animating away from it.
+ */
+function fitPopupIntoViewImpl(map: MapLibreMap, popup: Popup): void {
+  requestAnimationFrame(() => {
+    const element = popup.getElement();
+    if (!element || !popup.isOpen()) return;
+    const offset = popupPanOffset(
+      element.getBoundingClientRect(),
+      map.getContainer().getBoundingClientRect(),
+    );
+    if (needsPan(offset)) map.panBy([offset.x, offset.y], { duration: 0 });
+  });
+}
+
 function framePopupContent(
   props: Record<string, unknown>,
   opts: { onOpenFullSize?: (clientId: string) => void } = {},
@@ -749,19 +841,24 @@ function framePopupContent(
     openFull.addEventListener('click', () => opts.onOpenFullSize?.(clientId));
   }
 
-  return el('div', {}, [
+  // Title and action sit OUTSIDE the scroll region so both survive a popup taller
+  // than the map: the operator can always see what they clicked and always reach
+  // "Open full size", even when the facts have to be scrolled to.
+  return el('div', { class: 'frame-popup-body' }, [
     el('h3', { class: 'observation-popup-title', text: 'Camera frame' }),
-    preview,
-    el('p', {
-      class: status.severe ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
-      text: status.text,
-    }),
-    dl,
+    el('div', { class: 'frame-popup-scroll' }, [
+      preview,
+      el('p', {
+        class: status.severe ? 'observation-popup-flag is-outlier' : 'observation-popup-flag',
+        text: status.text,
+      }),
+      dl,
+      el('p', {
+        class: 'observation-popup-id',
+        text: String(props['client_id'] ?? 'unknown id'),
+      }),
+    ]),
     openFull,
-    el('p', {
-      class: 'observation-popup-id',
-      text: String(props['client_id'] ?? 'unknown id'),
-    }),
   ]);
 }
 

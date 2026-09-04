@@ -91,6 +91,38 @@ function defaultClusterColors(): ClusterColors {
   };
 }
 
+/**
+ * The read path's publication floors, mirrored.
+ *
+ * `app/config.py`: cluster_min_distinct_devices = 2, cluster_min_distinct_passes = 3,
+ * combined with OR in `cluster_query_service._FILTER`. Duplicated here because the
+ * tile deliberately applies NO corroboration filter — an operator triages candidates —
+ * so the map has to draw the distinction itself. corroboration.spec.ts reads config.py
+ * and fails if these two numbers ever drift apart from it.
+ */
+export const MIN_DISTINCT_DEVICES = 2;
+export const MIN_DISTINCT_PASSES = 3;
+
+/** Would `/api/v1/potholes` serve this cluster? Same rule, same numbers. */
+export function isCorroborated(distinctDevices: number, distinctPasses: number): boolean {
+  return distinctDevices >= MIN_DISTINCT_DEVICES || distinctPasses >= MIN_DISTINCT_PASSES;
+}
+
+/**
+ * Corroborated clusters are solid; candidates are drawn as a ring.
+ *
+ * Extends the raw layers' fill grammar one level up: hollow has meant "contributed
+ * nothing" on triangles and squares, and on a circle it means "nothing has confirmed
+ * this yet". Forming a cluster takes ONE reading (cluster_min_points = 1), so a solid
+ * circle was claiming corroboration the pipeline had not established — on the current
+ * corpus, for all 204 of them.
+ */
+const IS_CORROBORATED: ExpressionSpecification = [
+  'any',
+  ['>=', ['coalesce', ['get', 'distinct_devices'], 0], MIN_DISTINCT_DEVICES],
+  ['>=', ['coalesce', ['get', 'distinct_passes'], 0], MIN_DISTINCT_PASSES],
+];
+
 export function individualLayer(
   colors: ClusterColors = defaultClusterColors(),
 ): CircleLayerSpecification {
@@ -110,11 +142,25 @@ export function individualLayer(
       // the tier radii are the redundant channel that carries severity when colour
       // cannot, so shrinking them defeats the encoding.
       'circle-radius': ['case', IS_SELECTED, ['*', 1.5, radius], radius],
-      'circle-opacity': ['case', IS_REPAIRED, 0.55, 0.95],
+      // Repaired first, then corroborated: a repaired defect is done with, and
+      // whether it was ever corroborated stops being the operator's question.
+      'circle-opacity': ['case', IS_REPAIRED, 0.55, IS_CORROBORATED, 0.95, 0.12],
       // A halo keeps markers legible over both pale roads and dark parkland;
       // without it they disappear against mid-tone areas of the basemap.
-      'circle-stroke-width': ['case', IS_SELECTED, 2.5, 1.5],
-      'circle-stroke-color': ['case', IS_SELECTED, colors.selected, colors.halo],
+      'circle-stroke-width': ['case', IS_SELECTED, 2.5, IS_CORROBORATED, 1.5, 2.2],
+      // A candidate's ring carries the severity colour. Without this the fill was
+      // the only thing saying "Severe", so emptying it would have thrown the tier
+      // away — trading one unreadable map for another.
+      'circle-stroke-color': [
+        'case',
+        IS_SELECTED,
+        colors.selected,
+        IS_REPAIRED,
+        colors.halo,
+        IS_CORROBORATED,
+        colors.halo,
+        severity,
+      ],
       'circle-stroke-opacity': ['case', IS_REPAIRED, 0.5, 1],
     },
   };
@@ -248,8 +294,18 @@ export const OBSERVATIONS_MIN_ZOOM = 15;
  */
 export const OBSERVATIONS_MAX_ZOOM = 16;
 
-/** True when the sensor model's outlier gate rejected this observation. */
-const IS_OUTLIER: ExpressionSpecification = ['coalesce', ['get', 'sensor_is_outlier'], false];
+/**
+ * True when this reading is a member of some cluster — i.e. it fed a defect.
+ *
+ * This is the fill channel, and it used to be `sensor_is_outlier`, which answers a
+ * different question and got it wrong in both directions: 25 outlier-flagged readings
+ * ARE members (admitted by the frame-pairing path) and ~4,971 readings the gate passed
+ * are members of nothing, because only pothole-classed readings are ever eligible.
+ * The legend has always claimed hollow means "reached no cluster"; now it does.
+ *
+ * Served by tile_service._OBSERVATION_TILE_SQL as an explicit boolean.
+ */
+const IS_IN_CLUSTER: ExpressionSpecification = ['coalesce', ['get', 'in_cluster'], false];
 
 /**
  * Raw observations, styled by class and outlier flag.
@@ -258,12 +314,49 @@ const IS_OUTLIER: ExpressionSpecification = ['coalesce', ['get', 'sensor_is_outl
  * added beneath them — because a cluster is corroborated evidence and a lone
  * observation is not. They must not compete for attention.
  *
- * Outliers are drawn HOLLOW rather than hidden. They are the rows the member
- * gate silently drops, and 31.7% of pothole-classed observations still carry the
- * flag even after the class-neutral feature set; an operator seeing a ring of
- * hollow dots around a solid one is seeing a real property of the pipeline, not
- * noise. Hiding them would make the gate unfalsifiable from the UI.
+ * Readings that fed no cluster are drawn HOLLOW rather than hidden — 95.5% of the
+ * corpus, because only pothole-classed readings are ever eligible for membership.
+ * An operator seeing a run of hollow triangles with one solid among them is seeing
+ * a real property of the pipeline, not noise. Hiding them would make the member
+ * gate unfalsifiable from the UI, which is the whole reason this layer exists.
+ *
+ * The outlier flag is still on the tile and still worth reading, but it is NOT the
+ * fill: it is a statement about measurement conditions (speed and road noise), not
+ * about whether the reading contributed. The popup carries it in words instead.
  */
+/**
+ * The selectable sensor classes, keyed exactly as the icon expression buckets them.
+ *
+ * The mixture produces `pothole` / `crack` / `not`, but the marker bitmaps call the
+ * third one `other` and route anything unrecognised there too. The filter uses the
+ * same fallback — "not pothole and not crack" rather than "== not" — so a future
+ * fourth class cannot become invisible with no chip able to bring it back.
+ */
+export const OBSERVATION_CLASSES = ['pothole', 'crack', 'other'] as const;
+export type ObservationClass = (typeof OBSERVATION_CLASSES)[number];
+
+const SENSOR_CLASS: ExpressionSpecification = ['coalesce', ['get', 'sensor_class'], 'not'];
+
+/**
+ * Filter for a set of selected classes, or `null` for "everything" (no filter).
+ *
+ * An empty selection yields a filter that matches nothing, which is correct: it must
+ * hide the layer rather than fall through to showing everything — the `['any']` trap
+ * already documented in map.ts::setClusterFilter.
+ */
+export function observationClassFilter(
+  selected: ReadonlySet<string>,
+): ExpressionSpecification | null {
+  if (OBSERVATION_CLASSES.every((c) => selected.has(c))) return null;
+  const clauses: ExpressionSpecification[] = [];
+  if (selected.has('pothole')) clauses.push(['==', SENSOR_CLASS, 'pothole']);
+  if (selected.has('crack')) clauses.push(['==', SENSOR_CLASS, 'crack']);
+  if (selected.has('other')) {
+    clauses.push(['!', ['in', SENSOR_CLASS, ['literal', ['pothole', 'crack']]]]);
+  }
+  return ['any', ...clauses];
+}
+
 export interface ObservationColors {
   pothole: string;
   crack: string;
@@ -300,8 +393,8 @@ export function observationsLayer(
     'source-layer': SOURCE_LAYER_OBSERVATIONS,
     minzoom: OBSERVATIONS_MIN_ZOOM,
     layout: {
-      // Hollow for outliers: the same "did not contribute" grammar the frames layer
-      // uses, now carried by a hollow bitmap rather than a transparent fill.
+      // Hollow when it fed no cluster — literally the same predicate the frames layer
+      // uses for "paired with nothing", so one rule spans both raw layers.
       'icon-image': [
         'concat',
         'rw-triangle-',
@@ -312,7 +405,7 @@ export function observationsLayer(
           'crack', 'crack',
           'other',
         ],
-        ['case', IS_OUTLIER, '-hollow', ''],
+        ['case', IS_IN_CLUSTER, '', '-hollow'],
       ],
       'icon-size': 0.62,
       // These are dense point data; letting MapLibre drop overlapping markers would

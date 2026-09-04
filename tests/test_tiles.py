@@ -278,6 +278,84 @@ class TestObservationTile:
         resp = await client.get(f"/api/v1/tiles/observations/{z}/{x}/{y}.mvt")
         assert resp.status_code == 401
 
+    async def test_reports_whether_the_reading_fed_a_cluster(self, client, db_pool):
+        """The map's fill depends on this, and it is not derivable from any other column.
+
+        The client used to draw a reading hollow when `sensor_is_outlier` was set,
+        which answers a different question and gets it wrong in both directions.
+        This asserts the case that proved it: an outlier-flagged reading that IS a
+        cluster member, admitted by the member gate's second path (a camera frame at
+        fused_confidence >= 0.5) which does not consult the flag at all. On the
+        collected corpus 25 readings are in exactly this state.
+        """
+        async with db_pool.acquire() as conn:
+            # BOTH are outlier-flagged, deliberately. sensor_is_outlier is also a
+            # boolean on this tile, so seeding one of each would let `False in values`
+            # pass on the outlier column alone and assert nothing about membership.
+            # With the flag held constant, a False can only have come from in_cluster.
+            for client_id, outlier in (("obs_member", True), ("obs_orphan", True)):
+                await conn.execute(
+                    """
+                    INSERT INTO asset_observation (
+                        client_id, device_id, asset_type, schema_version, ts_utc,
+                        geom, confidence, sensor_class, sensor_is_outlier
+                    ) VALUES ($1, 'dev-1', 'pothole', 1, now(),
+                              ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography,
+                              1.0, 'pothole', $4)
+                    """,
+                    client_id, LON, LAT, outlier,
+                )
+            await _insert_cluster(conn, "clu_member")
+            await conn.execute(
+                """
+                INSERT INTO observation_cluster_link (cluster_id, member_id, kind)
+                VALUES ('clu_member', 'obs_member', 'observation')
+                """
+            )
+
+        z = settings.tile_observations_min_zoom
+        x, y = tile_of(LON, LAT, z)
+        resp = await client.get(
+            f"/api/v1/tiles/observations/{z}/{x}/{y}.mvt", headers=auth()
+        )
+        layer = layer_named(resp.content, "observations")
+
+        assert layer.feature_count == 2
+        assert "in_cluster" in layer.keys
+        assert "cluster_id" in layer.keys
+        # Both states present, so this cannot pass by emitting a constant.
+        assert True in layer.values
+        assert False in layer.values
+        # The member's cluster rides along for the popup. The orphan contributes no
+        # cluster_id at all -- ST_AsMVT omits NULL attributes -- which is exactly why
+        # in_cluster is emitted as its own explicit boolean rather than inferred
+        # from whether this string turned up.
+        assert "clu_member" in layer.values
+
+    async def test_a_reading_in_no_cluster_still_appears(self, client, db_pool):
+        """95.5% of the corpus is in this state; hiding it would defeat the layer."""
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO asset_observation (
+                    client_id, device_id, asset_type, schema_version, ts_utc,
+                    geom, confidence, sensor_class
+                ) VALUES ('obs_crack', 'dev-1', 'pothole', 1, now(),
+                          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
+                          1.0, 'crack')
+                """,
+                LON, LAT,
+            )
+
+        z = settings.tile_observations_min_zoom
+        x, y = tile_of(LON, LAT, z)
+        resp = await client.get(
+            f"/api/v1/tiles/observations/{z}/{x}/{y}.mvt", headers=auth()
+        )
+        layer = layer_named(resp.content, "observations")
+        assert layer.feature_count == 1
+        assert False in layer.values
+
 
 async def _insert_frame_row(
     conn,

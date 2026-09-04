@@ -213,6 +213,10 @@
   --duration-base: 180ms;
   --z-panel: 20;
   --z-overlay: 40;
+  /* Above the dock and the legend, which are both --z-overlay. MapLibre gives a
+     popup no z-index at all, so both of them painted over it. A popup answers a
+     click the operator just made; the two persistent overlays can be covered. */
+  --z-popup: 60;
   --z-modal: 100;
 }
 

@@ -139,6 +139,12 @@ button:disabled {
   background: var(--color-primary-subtle);
 }
 
+/* The Help link is an <a> wearing the same class, because it navigates rather
+   than acting — the UA underline is the only thing that gives it away. */
+a.link-button {
+  text-decoration: none;
+}
+
 .workspace {
   flex: 1;
   display: flex;
@@ -239,6 +245,21 @@ button:disabled {
   color: var(--color-text-subtle);
 }
 
+/* Section heading inside the legend list. The legend used to run severity, shapes
+   and states together under the single word "Severity", which is a large part of
+   why the map read as confused: three different questions, one label. */
+.legend-section {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-subtle);
+}
+
+.legend-section:first-child {
+  margin-top: 0;
+}
+
 .legend-list {
   list-style: none;
   margin: 0;
@@ -260,7 +281,10 @@ button:disabled {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 1.5px solid var(--marker-halo);
+  /* Colour arrives as --legend-swatch from shell.ts, so each shape below can
+     decide for itself how to render solid vs hollow. */
+  background: var(--legend-swatch);
+  border: 1.5px solid var(--legend-swatch);
   box-shadow: 0 0 0 1px var(--color-border);
   flex: 0 0 auto;
 }
@@ -798,6 +822,24 @@ button:disabled {
   letter-spacing: 0.06em;
 }
 
+/* A filter nested under the toggle it belongs to, so "Class" reads as part of
+   Sensor observations rather than as a fourth top-level filter. */
+.dock-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2) var(--space-5);
+}
+
+.dock-subgroup-title {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-text-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 /* Counts sit right-aligned so the tier names stay in one readable column. */
 .legend-count {
   margin-left: auto;
@@ -934,6 +976,13 @@ button:disabled {
 /* Raw-observation popup. An inspector for one sensor reading, opened from the
  * observations layer. Deliberately plainer than the cluster detail panel: a
  * reading is evidence, not a work item, and there is nothing to act on here. */
+/* MapLibre leaves a popup at `z-index: auto`, so the dock and the legend — both
+   --z-overlay — painted straight over it, hiding the photograph's right edge, the
+   close button and half of "Open full size". */
+.maplibregl-popup {
+  z-index: var(--z-popup);
+}
+
 .observation-popup .maplibregl-popup-content {
   background: var(--color-surface);
   color: var(--color-text);
@@ -941,6 +990,14 @@ button:disabled {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   padding: var(--space-3) var(--space-4);
+  /* The backstop for a window too short to pan out of trouble. map.ts pans the map
+     so an open popup fits, which handles the ordinary case without shrinking
+     anything; this only bites when the popup is taller than the map itself. The map
+     pane is the viewport minus the topbar and a bottom margin, hence the subtraction
+     rather than a bare vh. */
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .observation-popup .maplibregl-popup-tip {
@@ -1827,12 +1884,28 @@ button:disabled {
   border: 0;
 }
 
-/* Outline only — "this reading reached no cluster", the same grammar as a hollow
+/* Outline only — "this contributed to nothing", the same grammar as a hollow
  * marker on the map. */
 .legend-dot-hollow {
-  background: transparent !important;
+  background: transparent;
   border-width: 2px;
   border-style: solid;
+}
+
+/* A clip-path triangle has no border to leave showing (see above), so `hollow`
+ * would render a fully invisible swatch. Draw the outline as a filled triangle
+ * with a smaller surface-coloured one punched out of it instead. */
+.legend-dot.legend-dot-triangle.legend-dot-hollow {
+  background: var(--legend-swatch);
+  position: relative;
+}
+
+.legend-dot.legend-dot-triangle.legend-dot-hollow::after {
+  content: '';
+  position: absolute;
+  inset: 4px 2px 2px;
+  background: var(--color-surface);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
 }
 
 /* A low-zoom bin is not a defect: lower opacity plus a dashed edge, matching the
@@ -1878,9 +1951,37 @@ button:disabled {
   opacity: 1;
 }
 
+/* Title and action pinned, facts scrolling between them.
+ *
+ * The content box is the flex container and must NOT scroll itself — the
+ * .observation-popup rule above gives every popup `overflow-y: auto`, and leaving
+ * that on here would scroll the pinned button out of reach, which is the whole
+ * thing this layout exists to prevent. Same specificity as that rule, so this wins
+ * only by coming later in the file; keep it below. */
+.frame-popup .maplibregl-popup-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.frame-popup-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.frame-popup-scroll {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Without min-height a flex item refuses to shrink below its content, so the
+     region would grow instead of scrolling and push the button off again. */
+  min-height: 0;
+}
+
 .frame-popup-open {
   width: 100%;
   margin-top: var(--space-2);
+  flex: 0 0 auto;
 }
 
 @media (prefers-reduced-motion: reduce) {

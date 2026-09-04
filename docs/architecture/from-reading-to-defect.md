@@ -165,6 +165,25 @@ cluster, **and** either:
 - `sensor_class = 'pothole' AND sensor_is_outlier IS NOT TRUE`, **or**
 - it won a camera-frame pairing at `fused_confidence ≥ 0.5`.
 
+### What that means in practice, measured
+
+Only pothole-classed readings are ever eligible, so the class is very nearly the whole story:
+
+| class | readings | reach a cluster |
+|---|---|---|
+| crack | 3,599 | **0** |
+| not | 1,781 | **0** |
+| pothole, gate passed | 229 | **229 (100%)** |
+| pothole, gate flagged | 77 | 25 — **all 25 via the frame-pairing path** |
+
+**254 of 5,686 readings (4.5%) are members of any cluster.** Two things follow that are easy to get
+wrong, and the console got both wrong until 2026-09-03:
+
+- **The outlier flag does not decide membership.** 25 flagged readings are members, admitted by the
+  second path below, while 4,971 readings the gate passed are members of nothing. Drawing a marker
+  as "excluded" because it is flagged states something false.
+- **A passed gate is not an admission ticket.** Class is the binding constraint.
+
 Note the second is an **alternative path, not an extra requirement** — a crack-classed or
 outlier-flagged reading with a confident frame pairing is admitted anyway. And note what is
 *missing*: there is **no `sensor_p_pothole` floor anywhere**. The class is an argmax; a reading that

@@ -11,6 +11,7 @@ Docs are grouped by **what you want from them**, not by when they were written:
 
 | Folder | Read it when you want… |
 |---|---|
+| [`guides/`](#guides) | to actually *use* the console, as an operator rather than a developer |
 | [`architecture/`](#architecture) | to know how the system is *meant* to work, and why |
 | [`phases/`](#phases) | to know what was built in a given phase and what it cost |
 | [`runbooks/`](#runbooks) | to actually run something |
@@ -21,6 +22,15 @@ Docs are grouped by **what you want from them**, not by when they were written:
 they describe existed; the ones that have been overtaken say so at the top.
 
 ---
+
+## guides
+
+For the people who use the software, not the people who build it. The only docs here written for a
+non-engineer.
+
+| Doc | Read it when you want… |
+|---|---|
+| [`operator-console.md`](./guides/operator-console.md) | **Start here if you have just been given an account.** How to sign in, read the map's shape grammar and legend, use the filters and the detail panel, mark a repair, and work the frame review queue with both key maps. Also what every number on screen actually means, and a troubleshooting table for the behaviour that looks broken and is not. Rendered into the console itself as the **Help** link by `dashboard/scripts/build-guide.mjs`, so this file is the only copy. |
 
 ## architecture
 
@@ -56,6 +66,7 @@ are usually the more useful ones.
 | [`phase-2.7d-review-surface.md`](./phases/phase-2.7d-review-surface.md) | The labelling loop moved into the console — and a submit path that would have signed off frames nobody opened, which the exporter ships as background images |
 | [`phase-2.9-vlm-verification.md`](./phases/phase-2.9-vlm-verification.md) | The VLM has never been measured; the harness that will, and the thresholds it refutes |
 | [`phase-2.10-imagery-surfaces.md`](./phases/phase-2.10-imagery-surfaces.md) | Two thousand frames nobody had scored, a panel cropping away the road surface, and the first VLM that ever answered |
+| [`phase-2.11-console-legibility.md`](./phases/phase-2.11-console-legibility.md) | Three record types drawn as one shape, twenty photographs stored sideways, a VLM deliberately left without a button — and the KPI that admits nothing has been corroborated |
 | [`integration-round-2026-08.md`](./phases/integration-round-2026-08.md) | **The first full round.** An outlier gate that had learned to reject potholes, a severity scale saturating below its own minimum — and the finding that no cluster has ever been corroborated |
 
 ## runbooks

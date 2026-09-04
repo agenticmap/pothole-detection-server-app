@@ -11,12 +11,19 @@ Vector tile schema (v2), fields used here:
     Layer.name         = 1  (string)
     Layer.features     = 2  (repeated Feature)
     Layer.keys         = 3  (repeated string)
+    Layer.values       = 4  (repeated Value)
     Layer.extent       = 5  (uint32)
     Layer.version      = 15 (uint32)
+
+`values` is a per-layer deduplicated pool, not a per-feature mapping — features
+reference it by index. That is enough to assert a tile actually CARRIES a value
+(rather than merely declaring the key), which is what separates "the column is in
+the SELECT" from "the column arrived with the right contents".
 """
 
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass, field
 
 _WIRE_VARINT = 0
@@ -32,6 +39,7 @@ class Layer:
     version: int = 0
     feature_count: int = 0
     keys: list[str] = field(default_factory=list)
+    values: list[object] = field(default_factory=list)
 
 
 def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
@@ -68,6 +76,29 @@ def _iter_fields(buf: bytes):
             raise ValueError(f"Unsupported protobuf wire type {wire_type}")
 
 
+def _parse_value(buf: bytes) -> object:
+    """One Layer.values entry.
+
+    Value is a union: exactly one field is set. Only the types PostGIS actually
+    emits through ST_AsMVT are handled — strings, doubles, ints and bools — and an
+    unrecognised one returns None rather than raising, so a new column type cannot
+    break every tile assertion in the suite at once.
+    """
+    for field_number, payload in _iter_fields(buf):
+        if field_number == 1:
+            return payload.decode("utf-8")
+        if field_number == 3:
+            return struct.unpack("<d", payload)[0]
+        if field_number in (4, 5):
+            return payload
+        if field_number == 6:
+            # zigzag
+            return (payload >> 1) ^ -(payload & 1)
+        if field_number == 7:
+            return bool(payload)
+    return None
+
+
 def _parse_layer(buf: bytes) -> Layer:
     layer = Layer()
     for field_number, payload in _iter_fields(buf):
@@ -77,6 +108,8 @@ def _parse_layer(buf: bytes) -> Layer:
             layer.feature_count += 1
         elif field_number == 3:
             layer.keys.append(payload.decode("utf-8"))
+        elif field_number == 4:
+            layer.values.append(_parse_value(payload))
         elif field_number == 5:
             layer.extent = payload
         elif field_number == 15:

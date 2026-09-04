@@ -62,7 +62,23 @@ export interface DockFilter {
   tiers: Set<string>;
   sources: Set<string>;
   minDevices: number;
+  /**
+   * Which sensor classes the observations layer draws.
+   *
+   * Defaults to pothole alone. Only pothole-classed readings are ever eligible for
+   * cluster membership, so the other 94.6% of the corpus cannot become a defect no
+   * matter what — showing them all by default buried the 254 readings that fed
+   * something under 5,432 that could not.
+   */
+  observationClasses: Set<string>;
 }
+
+/** Chip labels for the three sensor classes. Keys match OBSERVATION_CLASSES. */
+const CLASS_LABELS: [string, string][] = [
+  ['pothole', 'Pothole'],
+  ['crack', 'Crack'],
+  ['other', 'Other'],
+];
 
 export interface DockCallbacks {
   onFilterChange: (filter: DockFilter) => void;
@@ -88,6 +104,8 @@ export class Dock {
   private readonly heading: HTMLElement;
   private readonly kpiGrid: HTMLElement;
   private readonly tierRow: HTMLElement;
+  private readonly classRow: HTMLElement;
+  private readonly classGroup: HTMLElement;
   private readonly sourceRow: HTMLElement;
   private readonly sourceGroup: HTMLElement;
   private readonly deviceRow: HTMLElement;
@@ -101,6 +119,7 @@ export class Dock {
     tiers: new Set(ALL_TIER_LABELS),
     sources: new Set(),
     minDevices: 1,
+    observationClasses: new Set(['pothole']),
   };
   private stats: ClusterStats | null = null;
   /** Every source seen in the viewport, so "all selected" can be recognised. */
@@ -115,6 +134,7 @@ export class Dock {
     this.heading = el('h2', { class: 'dock-title', text: opts.scope });
     this.kpiGrid = el('div', { class: 'kpi-grid' });
     this.tierRow = el('div', { class: 'chip-row' });
+    this.classRow = el('div', { class: 'chip-row' });
     this.sourceRow = el('div', { class: 'chip-row' });
     this.deviceRow = el('div', { class: 'chip-row' });
     this.note = el('p', { class: 'provenance-note', hidden: 'hidden' });
@@ -161,14 +181,19 @@ export class Dock {
       class: 'dock-toggle-input',
     }) as HTMLInputElement;
     this.observationsToggle.addEventListener('change', () => {
+      this.classGroup.hidden = !this.observationsToggle.checked;
       this.callbacks.onObservationsToggle(this.observationsToggle.checked);
+      // Re-emit so the class filter is applied to a layer that may have only just
+      // been created. Without this the default (pothole only) would not take effect
+      // until the operator happened to click a chip.
+      this.emit();
     });
     this.observationsHint = el('p', {
       class: 'dock-group-hint',
       text:
-        'Individual readings before clustering: sensor observations the outlier gate ' +
-        'rejected, and camera frames that never paired. Both are hollow when they ' +
-        `reached no cluster. Zoom ${OBSERVATIONS_HINT_ZOOM}+ to see them.`,
+        'Individual readings before clustering. Solid means it fed a defect; hollow ' +
+        'means it fed nothing — most readings do not, because only pothole-classed ' +
+        `ones are eligible. Zoom ${OBSERVATIONS_HINT_ZOOM}+ to see them.`,
     });
     // Camera frames. A separate toggle rather than one "show raw data" switch,
     // because the two answer different questions -- where a wheel hit something
@@ -183,12 +208,23 @@ export class Dock {
       this.callbacks.onFramesToggle(this.framesToggle.checked);
     });
 
+    // Nested under the sensor toggle and hidden until it is on, because it filters
+    // that layer and nothing else. No counts on these chips: a per-class count would
+    // have to come from the observations tile, which is zoom-gated and per-tile
+    // capped, so the number would disagree with what is drawn. An honest label beats
+    // a count that is wrong at 4 zoom levels out of 5.
+    this.classGroup = el('div', { class: 'dock-subgroup', hidden: 'hidden' }, [
+      el('h4', { class: 'dock-subgroup-title', text: 'Class' }),
+      this.classRow,
+    ]);
+
     const observationsGroup = el('div', { class: 'dock-group' }, [
       el('h3', { class: 'dock-group-title', text: 'Raw detections' }),
       el('label', { class: 'dock-toggle' }, [
         this.observationsToggle,
         el('span', { text: 'Sensor observations' }),
       ]),
+      this.classGroup,
       el('label', { class: 'dock-toggle' }, [
         this.framesToggle,
         el('span', { text: 'Camera frames' }),
@@ -384,6 +420,23 @@ export class Dock {
       }),
     );
 
+    this.classRow.replaceChildren(
+      ...CLASS_LABELS.map(([key, label]) =>
+        this.chip(label, this.filter.observationClasses.has(key), null, () => {
+          // Same guard as the tiers: emptying the set would blank the layer with
+          // no way back except re-selecting.
+          if (
+            this.filter.observationClasses.has(key) &&
+            this.filter.observationClasses.size === 1
+          ) {
+            return;
+          }
+          this.toggle(this.filter.observationClasses, key);
+          this.emit();
+        }),
+      ),
+    );
+
     // Hidden entirely when the viewport has no clusters — an empty filter row is
     // worse than no row.
     this.sourceGroup.hidden = this.knownSources.length === 0;
@@ -448,6 +501,7 @@ export class Dock {
       tiers: new Set(this.filter.tiers),
       sources: new Set(this.filter.sources),
       minDevices: this.filter.minDevices,
+      observationClasses: new Set(this.filter.observationClasses),
     });
   }
 

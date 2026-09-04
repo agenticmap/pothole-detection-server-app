@@ -272,6 +272,7 @@ function renderApp(): void {
           selected: filter.sources,
           all: dock!.allSourcesSelected(),
         });
+        map?.setObservationFilter(filter.observationClasses);
         setOpenCount(dock!.shownCount(), lastOpenTotal);
       },
       onObservationsToggle: (visible) => map?.setObservationsVisible(visible),

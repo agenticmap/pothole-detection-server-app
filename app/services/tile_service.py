@@ -172,6 +172,21 @@ WHERE t.geom IS NOT NULL
 """
 
 # Raw sensor observations, for street-level inspection of what fed a cluster.
+#
+# `in_cluster` is what makes the map's fill honest. The client draws a reading hollow
+# when it contributed to nothing, and it used to derive that from sensor_is_outlier --
+# which is a different question and gets the answer wrong both ways. Measured on the
+# collected corpus: 25 outlier-flagged readings ARE cluster members (they came in via
+# the frame-pairing path, `fused_confidence >= 0.5`), while ~4,971 readings that the
+# gate passed reach no cluster at all, because only pothole-classed readings are ever
+# eligible. Membership is not derivable from any column already on the tile, so it has
+# to be carried.
+#
+# Emitted as an explicit boolean rather than left implicit in the presence of
+# cluster_id: ST_AsMVT omits NULL attributes entirely, so "absent means no" would make
+# the grammar depend on the one MVT behaviour this codebase has already been bitten by.
+# cluster_id rides along for the popup, and IS allowed to be absent.
+#
 # $1=z $2=x $3=y $4=asset_type $5=window_days $6=limit
 _OBSERVATION_TILE_SQL = f"""
 WITH bounds AS (SELECT ST_TileEnvelope($1, $2, $3) AS env)
@@ -189,8 +204,20 @@ FROM (
         o.sensor_is_outlier,
         o.speed_mps,
         o.accuracy_m,
+        cl.cluster_id,
+        (cl.cluster_id IS NOT NULL) AS in_cluster,
         extract(epoch FROM o.ts_utc)::bigint AS ts_epoch
-    FROM asset_observation o, bounds b
+    FROM asset_observation o
+    CROSS JOIN bounds b
+    -- One indexed lookup per row (idx_observation_cluster_link_member). LIMIT 1
+    -- because the link table is keyed (cluster_id, member_id, kind) and a reading
+    -- belonging to two clusters would otherwise duplicate the whole row.
+    LEFT JOIN LATERAL (
+        SELECT l.cluster_id
+        FROM observation_cluster_link l
+        WHERE l.member_id = o.client_id AND l.kind = 'observation'
+        LIMIT 1
+    ) cl ON true
     WHERE o.asset_type = $4
       AND ST_Transform(o.geom::geometry, 3857) && b.env
       AND o.ts_utc >= now() - make_interval(days => $5)

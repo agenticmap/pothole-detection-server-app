@@ -271,6 +271,19 @@ export function buildShell(
   const signOut = el('button', { class: 'link-button', type: 'button', text: 'Sign out' });
   signOut.addEventListener('click', callbacks.onSignOut);
 
+  // Rendered from docs/guides/operator-console.md by scripts/build-guide.mjs, which
+  // runs on prebuild. Relative so it resolves under the /dashboard mount without
+  // hardcoding it; a new tab so an operator never loses a half-finished review pass
+  // to a navigation.
+  const help = el('a', {
+    class: 'link-button',
+    href: 'guide.html',
+    target: '_blank',
+    rel: 'noopener',
+    title: 'How to use this console',
+    text: 'Help',
+  });
+
   const topbar = el('header', { class: 'topbar' }, [
     el('div', { class: 'brand' }, [
       // The mark is a letter on a terracotta disc; organic-shell.css sizes it and
@@ -288,6 +301,7 @@ export function buildShell(
       el('span', { class: 'user-email', text: opts.userEmail }),
       el('span', { class: 'user-meta', text: `${opts.orgId} · ${opts.role}` }),
     ]),
+    help,
     buildThemeToggle(callbacks.onThemeChange),
     signOut,
   ]);
@@ -360,12 +374,14 @@ function renderLegendItems(legend: Element): void {
     color: string;
     size: number;
     count: number | null;
-    /** Circle unless stated: triangle = sensor event, square = camera frame. */
+    /** Circle unless stated: triangle = sensor reading, square = camera frame. */
     shape?: 'triangle' | 'square';
-    /** Outline only — "this reading reached no cluster". */
+    /** Outline only — "this contributed to nothing". */
     hollow?: boolean;
     /** A low-zoom bin, not a defect. */
     aggregate?: boolean;
+    /** Starts a new labelled section, rendered before this row. */
+    group?: string;
   }> =
     SEVERITY_TIERS.map((tier, i) => ({
       label: tier.label,
@@ -383,27 +399,41 @@ function renderLegendItems(legend: Element): void {
 
   // ── What else is actually on screen ──────────────────────────────────────────
   //
-  // The legend explained six severity states while about eleven marker states were
-  // drawn. Everything below was unexplained: the two raw-detection layers, the
-  // aggregate bin, and the hollow convention -- which is the layers' central visual
-  // grammar and appeared nowhere.
+  // Everything above is severity; everything below is a different question, and
+  // running them together under one "Severity" heading is a large part of why the
+  // map read as confused. Two labelled sections now, and the holes are filled:
   //
-  // Shape is the primary key now: a circle is a corroborated defect, a triangle one
-  // sensor reading, a square one camera image. The swatches say so.
-  rows.push({ label: 'Sensor event · pothole', color: cssVar('--review-class-0'), size: 11,
+  //   * `not`-classed readings had NO row at all, while being 31% of the corpus —
+  //     1,781 grey triangles an operator could only guess at.
+  //   * Grey meant two unrelated things (a `not` reading, an unscored frame) with
+  //     only the frame meaning explained, so a grey triangle read as "not yet
+  //     scored". Every observation is scored; there are zero unscored ones.
+  //   * "Reached no cluster" was drawn as a square and was FALSE for triangles,
+  //     where hollow used to mean outlier-flagged. Now one rule covers all three
+  //     shapes, so it is stated once, for all of them.
+  rows.push({ group: 'What it is', label: 'Sensor reading · pothole',
+              color: cssVar('--review-class-0'), size: 11, count: null, shape: 'triangle' });
+  rows.push({ label: 'Sensor reading · crack', color: cssVar('--review-class-4'), size: 11,
               count: null, shape: 'triangle' });
-  rows.push({ label: 'Sensor event · crack', color: cssVar('--review-class-4'), size: 11,
+  rows.push({ label: 'Sensor reading · other', color: cssVar('--marker-neutral'), size: 11,
               count: null, shape: 'triangle' });
   rows.push({ label: 'Camera frame', color: cssVar('--color-accent-2'), size: 11,
               count: null, shape: 'square' });
-  rows.push({ label: 'Not yet scored', color: cssVar('--marker-neutral'), size: 11,
-              count: null, shape: 'square' });
-  rows.push({ label: 'Reached no cluster', color: cssVar('--marker-neutral'), size: 11,
-              count: null, shape: 'square', hollow: true });
+  rows.push({ label: 'Camera frame · not yet scored', color: cssVar('--marker-neutral'),
+              size: 11, count: null, shape: 'square' });
   rows.push({ label: 'Many defects (count shown)', color: unknownColor(), size: 16,
               count: null, aggregate: true });
 
-  const items = rows.map((row) => {
+  // One rule, three shapes. A hollow circle is the same statement one level up:
+  // the defect exists but nothing has corroborated it.
+  rows.push({ group: 'Hollow means', label: 'Defect · not yet corroborated',
+              color: unknownColor(), size: 12, count: null, hollow: true });
+  rows.push({ label: 'Reading · fed no defect', color: cssVar('--marker-neutral'), size: 11,
+              count: null, shape: 'triangle', hollow: true });
+  rows.push({ label: 'Frame · paired with nothing', color: cssVar('--marker-neutral'),
+              size: 11, count: null, shape: 'square', hollow: true });
+
+  const items = rows.flatMap((row) => {
     const isRepaired = row.label === 'Repaired';
     // The swatch has to be the SHAPE the map draws, or the legend is a different
     // key from the one on screen -- which is the failure severity.ts's own header
@@ -414,9 +444,11 @@ function renderLegendItems(legend: Element): void {
     const shapeClass = row.shape ? ` legend-dot-${row.shape}` : '';
     const hollowClass = row.hollow ? ' legend-dot-hollow' : '';
     const aggregateClass = row.aggregate ? ' legend-dot-aggregate' : '';
-    const fill = row.hollow
-      ? `border-color:${row.color}`
-      : `background:${row.color};border-color:${row.color}`;
+    // One custom property rather than background/border-color inline, so the CSS
+    // can decide how each shape expresses "hollow". A clip-path triangle has no
+    // border to leave showing, so it needs a second inner shape — which inline
+    // styles cannot express, and which used to make a hollow triangle invisible.
+    const fill = `--legend-swatch:${row.color}`;
     const dot = el('span', {
       class: isRepaired
         ? 'legend-dot legend-dot-repaired'
@@ -428,14 +460,23 @@ function renderLegendItems(legend: Element): void {
       // In compact mode the label is gone, so the swatch has to carry it.
       title: row.count === null ? row.label : `${row.label} — ${row.count}`,
     });
-    if (compact) return el('li', { class: 'legend-item' }, [dot]);
-    return el('li', { class: 'legend-item' }, [
-      dot,
-      el('span', { text: row.label }),
-      row.count === null
-        ? null
-        : el('span', { class: 'legend-count', text: String(row.count) }),
-    ]);
+    // In compact mode the labels are gone, so a section heading would be a stray
+    // word above unlabelled swatches. The titles still carry the meaning there.
+    const heading =
+      row.group && !compact
+        ? el('li', { class: 'legend-section' }, [el('span', { text: row.group })])
+        : null;
+
+    const item = compact
+      ? el('li', { class: 'legend-item' }, [dot])
+      : el('li', { class: 'legend-item' }, [
+          dot,
+          el('span', { text: row.label }),
+          row.count === null
+            ? null
+            : el('span', { class: 'legend-count', text: String(row.count) }),
+        ]);
+    return heading ? [heading, item] : [item];
   });
   list.replaceChildren(...items);
 }

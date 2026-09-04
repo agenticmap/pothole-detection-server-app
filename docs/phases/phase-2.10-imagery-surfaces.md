@@ -356,7 +356,9 @@ model and no provider.
    largest recall ceiling in the pipeline". It needs a measured threshold, and the current 375
    labels cannot supply one — at p ≥ 0.50 precision is 0.300 and recall 0.092; at p ≥ 0.60, 0.500
    and 0.031. More labels is the unlock, so it follows the seam pass.
-5. **The map → viewer path was cut**, as the plan said it would be if the round ran long. It needs a
-   new `GET /api/v1/frames/{client_id}` endpoint, because the frames tile carries
-   `server_box_count` and not the boxes. The pure `map/frame-facts.ts` extraction it depended on
-   did land.
+5. ~~**The map → viewer path was cut**, as the plan said it would be if the round ran long. It needs
+   a new `GET /api/v1/frames/{client_id}` endpoint, because the frames tile carries
+   `server_box_count` and not the boxes.~~ **Shipped in `d68c253`**, together with the popup
+   thumbnail and the `FrameDetailResponse` the unpaired case required — see
+   [`phase-2.11-console-legibility.md`](./phase-2.11-console-legibility.md) §4. The pure
+   `map/frame-facts.ts` extraction it depended on landed in this phase.

@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-23
+updated: 2026-09-03
 ---
 
 # RoadWatch — operator dashboard
@@ -14,6 +14,11 @@ its successor [`../docs/phases/phase-2.5b-dashboard-design.md`](../docs/phases/p
 
 **Read those before changing the tile auth, the basemap palette or the severity encoding** — all
 three have non-obvious constraints that cost real debugging time to find.
+
+> **This file is for people who build the console. People who *use* it want
+> [`../docs/guides/operator-console.md`](../docs/guides/operator-console.md)** — the workflow
+> guide, which is also what the console's **Help** link renders. Keep workflow prose there and
+> implementation notes here, or the two will drift and the user-facing one will lose.
 
 ## Quick start
 
@@ -38,7 +43,13 @@ cd .. && POTHOLE_STAFF_PASSWORD='…' python scripts/create_staff.py \
     --email jane@cambridge.gov --role staff
 ```
 
-`viewer` sees everything but no repair control; `staff` and `admin` can mark repairs.
+`viewer` sees everything but no repair control; `staff` and `admin` get one.
+
+> **But `staff` cannot currently repair anything real.** `asset_cluster.org_id` scopes repair
+> writes, an **unowned** cluster (`org_id IS NULL`) takes an `admin`, and the clustering job sets
+> no owner — so every cluster the pipeline produces is unowned. The 403 renders as *"Your account
+> no longer has permission to do that"*, which misdescribes the cause. Use `admin` until the
+> clustering job assigns ownership.
 
 For a throwaway account against the test database — with 120 synthetic clusters to look at —
 use the ready-made one under [Demo data](#demo-data) instead.
@@ -178,18 +189,34 @@ endpoints return 400 below that, so each source carries a matching `minzoom`.
 | Camera frames | `GET /api/v1/tiles/frames` | Where did the camera think it saw a defect? |
 
 They are genuinely different sets: 98.6% of pothole-classed observations have no coincident frame,
-and there are more frames (5,615) than observations (4,637).
+and there are far more frames than observations. For today's counts, ask the database rather than
+this file — every figure quoted here has been stale at least once:
+
+```sql
+SELECT (SELECT count(*) FROM asset_frame)       AS frames,
+       (SELECT count(*) FROM asset_observation) AS observations,
+       (SELECT count(*) FROM asset_cluster)     AS clusters;
+```
 
 **One visual rule spans both: hollow means it did not contribute.** On the sensor layer that is a
 reading the outlier gate rejected; on the camera layer it is a frame that paired with nothing and so
 reached no cluster. Learn it once and both layers read. Grey camera frames are ones the detector has
-not scored yet. Camera radius encodes `server_probability`, because the mean is 0.151 and only 352
-of 5,615 exceed 0.5 — flat radii would render as a uniform smear.
+not scored yet. Camera radius encodes `server_probability`, because the mean is low and only a few
+hundred frames exceed 0.5 — flat radii would render as a uniform smear.
 
-They exist because a cluster needs three admitted detections within 25 m, and plenty never get
-there: only 110 of 166 admitted observations reach one, and 1,183 of 5,615 frames pair with nothing.
-Hiding that would make the pipeline's own gates unfalsifiable from the UI. Click any point for its
-full record.
+**Shape carries the record type, colour carries severity.** Circle = cluster, triangle = sensor
+observation, square = camera frame, chosen because shape survives greyscale. Registration of the
+icon bitmaps lives inside `addClusterLayers` because `setStyle` discards images — put it anywhere
+else and the markers vanish the first time someone toggles dark mode. See
+[`docs/phases/phase-2.11-console-legibility.md`](../docs/phases/phase-2.11-console-legibility.md).
+
+They exist because plenty of readings never reach a cluster at all — the outlier gate rejects some,
+and most frames pair with no sensor event. (An earlier version of this line said a cluster needs
+**three** admitted detections within 25 m. `cluster_min_points` is **1**; corroboration moved to
+the read path. See
+[`docs/architecture/from-reading-to-defect.md`](../docs/architecture/from-reading-to-defect.md).)
+Hiding that would make the pipeline's own gates unfalsifiable from the UI. **Click a frame for its
+photograph, its scores, and an "Open full size" button into the frame viewer.**
 
 ## Frame review
 
@@ -209,11 +236,13 @@ mode lost. The legend under the stage is generated from the same array the dispa
 cannot drift.
 
 **Judge** — `1` pothole · `0` not · `u` unsure · `m`/`s`/`g`/`w` reason tags · `n` note ·
-`b` show the model's boxes · `j`/`k` or arrows to move · `r` reload.
+`b` show the model's boxes · `j`/`k` or arrows to move · `r` reload · `t` turn the frame 90°.
 
 **Draw boxes** — `1`–`5` active class · drag on the image to draw · click a box to select ·
 `Del` delete · `Esc` deselect · `Enter` or `j`/`k` **save and move** · `Shift`+move to peek without
-recording · `Home`/`End` jump · `s` submit every draft · `r` re-sync.
+recording · `Home`/`End` jump · `s` submit every draft · `r` re-sync · `t` turn the frame 90°
+(drawing pauses while turned — a box drawn on a rotated view would be stored against the
+unrotated pixels).
 
 ### Layout
 
@@ -256,8 +285,9 @@ anchor yours even via devtools.
 
 ### Starting the seam
 
-The band worth clearing is **≥ 0.30** — 1,041 unlabelled frames, the densest expected pothole
-yield in the corpus. Judge first, then switch to Draw boxes, which only queues frames that already
+The band worth clearing is **≥ 0.30**, the densest expected pothole yield in the corpus. For the
+current size of that seam, read the review module's own topline — it reports the server's
+band-global figure, which is the one that matters and does not go stale in a README. Judge first, then switch to Draw boxes, which only queues frames that already
 have a verdict. Background in
 [`docs/phases/phase-2.7d-review-surface.md`](../docs/phases/phase-2.7d-review-surface.md).
 
@@ -275,7 +305,7 @@ Two reviewers working the same band will silently overwrite each other's *boxes*
 replace-all with no history table. `frame_label_history` covers verdicts only.
 
 **Corrected from an earlier version of this section**, which said there were no automated frontend
-tests. There are now 69 vitest specs over `review/geometry.ts` and `review/queue-state.ts`
+tests. There are now 151 vitest specs over 8 files
 (`npm run test:unit`), and CI gained a `dashboard` job running `npm ci`, `test:unit` and `build` —
 so `tsc --noEmit` no longer runs on no machine but a developer's. Coverage is still only those two
 modules; nothing else in `dashboard/src` is tested.
