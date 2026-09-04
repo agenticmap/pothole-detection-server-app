@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 // Vite's ?raw import rather than node:fs, so this stays inside the browser type
 // space — pulling in @types/node for one test would put `process` and friends
 // within reach of application code, in a codebase that has none.
-import configSource from '../../../app/config.py?raw';
-import { isCorroborated, MIN_DISTINCT_DEVICES, MIN_DISTINCT_PASSES } from './layers';
+import configSource from '../../app/config.py?raw';
+import { isCorroborated, MIN_DISTINCT_DEVICES, MIN_DISTINCT_PASSES } from './corroboration';
 
 describe('isCorroborated', () => {
   it('is an OR, not an AND — one phone on three days counts', () => {

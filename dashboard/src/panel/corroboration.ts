@@ -34,8 +34,20 @@ export function formatSpan(seconds: number): string {
  * `passes >= 2` returns null deliberately — that is the corroborated case and the
  * field above already reports it.
  */
-export function spanNoteText(passes: number, spanS: number | null): string | null {
+export function spanNoteText(
+  passes: number,
+  spanS: number | null,
+  observationCount?: number,
+): string | null {
   if (passes >= 2) return null;
+  // A single reading first, because every branch below describes a SET of
+  // observations and none of them is true of one. "All observations within 0 s"
+  // is a statement about a set of one, and it was what the panel showed for 163
+  // of the corpus's 204 clusters -- forming one takes a single admitted reading
+  // (cluster_min_points = 1), so this is the common case, not the edge case.
+  if (observationCount === 1) {
+    return 'One reading, on one pass. This is a candidate, not a confirmed defect.';
+  }
   if (spanS === null || !Number.isFinite(spanS)) {
     return 'One pass — nothing has corroborated this defect yet.';
   }

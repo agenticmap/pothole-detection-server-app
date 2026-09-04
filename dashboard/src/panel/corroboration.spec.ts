@@ -43,6 +43,30 @@ describe('spanNoteText', () => {
     );
   });
 
+  it('does not describe a set of one as a set', () => {
+    // 163 of 204 clusters have exactly one member, so this is the common case.
+    // "All observations within 0 s" is a claim about a group that does not exist.
+    expect(spanNoteText(1, 0, 1)).toBe(
+      'One reading, on one pass. This is a candidate, not a confirmed defect.',
+    );
+  });
+
+  it('still corroborates over a single reading, if that ever happens', () => {
+    // The count must not outrank the passes check: two passes is corroboration
+    // whatever the member count says.
+    expect(spanNoteText(2, 0, 1)).toBeNull();
+  });
+
+  it('leaves the multi-observation sentences alone', () => {
+    // The new branch is opt-in on an argument the other call sites do not pass;
+    // it must not swallow the cases below it.
+    expect(spanNoteText(1, 12, 4)).toBe(
+      'All observations within 12 s — one drive-past, not repeat corroboration.',
+    );
+    expect(spanNoteText(1, 3600, 9)).toBe('One pass spanning 1 h — no repeat coverage yet.');
+    expect(spanNoteText(1, 12)).not.toBeNull();
+  });
+
   it('distinguishes one long pass from one brief one', () => {
     expect(spanNoteText(1, 3600)).toBe('One pass spanning 1 h — no repeat coverage yet.');
   });

@@ -417,6 +417,22 @@ a.link-button {
   border: 1px solid rgb(15 23 42 / 0.12);
 }
 
+/* Is this evidence, or a lead? Forming a cluster takes one admitted reading, so
+   without this the panel reads as a confirmed defect for every candidate. Outlined
+   rather than filled, to match the hollow ring the map draws for the same state --
+   the two surfaces are answering the same question and should look like it. */
+.badge-candidate {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px dashed var(--color-border-strong);
+}
+
+.badge-corroborated {
+  background: var(--color-accent-2-subtle);
+  color: var(--color-text);
+  border: 1px solid var(--color-border-strong);
+}
+
 .field {
   display: flex;
   justify-content: space-between;
@@ -592,6 +608,15 @@ a.link-button {
   margin: 0;
   font-size: var(--text-sm);
   color: var(--color-text-subtle);
+}
+
+/* The corroboration note, now sitting directly under the badges rather than at the
+   foot of the facts. It qualifies the numbers below it, so it reads before them. */
+.panel-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--color-text-muted);
 }
 
 .error-text {

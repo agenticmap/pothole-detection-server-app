@@ -150,6 +150,32 @@ effect: widest cluster 124 m → 19.9 m, clusters wider than 25 m 15 → 0.
 `min(2 × accuracy_m, eps)` — the paper's own 2σ buffer. Measured 2σ on this corpus: p25 5.1 m,
 median 6.8 m, p95 17.7 m. Camera frames have no accuracy column and take the 25 m fallback.
 
+**So the working radius is about 6.9 m, and the 25 m in the config is misleading if read as the
+grouping distance.** It is the single biggest reason 163 of 204 clusters have one member:
+
+| | admitted readings with any neighbour (of 254) |
+|---|---|
+| effective radius (median 6.9 m) | **94** |
+| the 25 m ceiling | 188 |
+
+**And the buffer omits the dominant error term.** 56% of readings carry whole-second timestamps, and
+at the median 12.38 m/s that is **±12.4 m of along-track uncertainty** — larger than the 8.7 m that
+2σ of a 4.37 m accuracy reading allows. 5,686 readings share only 4,837 distinct positions, so GPS
+fixes are reused across readings as well. A buffer of `2 × accuracy + speed × Δt` would take the
+median radius to 19.5 m and the readings-with-a-neighbour count to 175.
+
+**That change is not obviously right, and it would not fix corroboration.** Within one pass two
+readings 14 m apart (the measured median gap) are two different rough spots, so a wider radius
+would merge distinct defects. And across days, where a wider radius genuinely would help, there is
+almost nothing to find — admitted readings having another admitted reading from a *different* day:
+
+| radius | 7 m | 20 m | 25 m | 50 m | 100 m |
+|---|---|---|---|---|---|
+| readings | 2 | 5 | 5 | 11 | 17 |
+
+The same defect is essentially never detected twice. **Repeatability is the binding constraint, not
+the radius** — which is why the radius has been left alone and written down instead.
+
 ### One reading is enough to form a cluster
 
 `cluster_min_points = 1`, not 3. At 25 m and a median 13 m/s, "three detections within 25 m" is

@@ -34,9 +34,21 @@ export function clear(node: Element): void {
   node.replaceChildren();
 }
 
-/** A labelled value row, with tabular figures so columns don't jitter. */
-export function field(label: string, value: string, mono = false): HTMLElement {
-  return el('div', { class: 'field' }, [
+/**
+ * A labelled value row, with tabular figures so columns don't jitter.
+ *
+ * `title` is for a field whose label cannot carry its own caveat — the panel's
+ * classifier score is a saturating posterior, not a measure of certainty, and a
+ * bare number invites the wrong reading. On the row rather than the value, so
+ * hovering anywhere on the line shows it.
+ */
+export function field(
+  label: string,
+  value: string,
+  mono = false,
+  title?: string,
+): HTMLElement {
+  return el('div', { class: 'field', ...(title ? { title } : {}) }, [
     el('span', { class: 'field-label', text: label }),
     el('span', { class: mono ? 'field-value mono' : 'field-value', text: value }),
   ]);

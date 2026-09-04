@@ -35,6 +35,7 @@ import {
   unknownColor,
 } from '../severity.ts';
 import { cssVar } from '../tokens.ts';
+import { MIN_DISTINCT_DEVICES, MIN_DISTINCT_PASSES } from '../corroboration.ts';
 
 export const SOURCE_ID = 'clusters';
 export const SOURCE_LAYER = 'clusters';
@@ -89,23 +90,6 @@ function defaultClusterColors(): ClusterColors {
     halo: haloColor(),
     selected: selectedRingColor(),
   };
-}
-
-/**
- * The read path's publication floors, mirrored.
- *
- * `app/config.py`: cluster_min_distinct_devices = 2, cluster_min_distinct_passes = 3,
- * combined with OR in `cluster_query_service._FILTER`. Duplicated here because the
- * tile deliberately applies NO corroboration filter — an operator triages candidates —
- * so the map has to draw the distinction itself. corroboration.spec.ts reads config.py
- * and fails if these two numbers ever drift apart from it.
- */
-export const MIN_DISTINCT_DEVICES = 2;
-export const MIN_DISTINCT_PASSES = 3;
-
-/** Would `/api/v1/potholes` serve this cluster? Same rule, same numbers. */
-export function isCorroborated(distinctDevices: number, distinctPasses: number): boolean {
-  return distinctDevices >= MIN_DISTINCT_DEVICES || distinctPasses >= MIN_DISTINCT_PASSES;
 }
 
 /**

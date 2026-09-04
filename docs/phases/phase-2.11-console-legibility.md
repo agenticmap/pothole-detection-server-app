@@ -273,6 +273,44 @@ nothing**:
 > to a custom property, and a hollow triangle is now drawn as a filled shape with a smaller
 > surface-coloured one punched out.
 
+## 7. "How come one observation shapes the cluster?"
+
+The operator opened a cluster reading **Observations 1**, **Corroborating passes 1**, and directly
+above them **Confidence 1.00**, and asked how one reading can be a defect.
+
+The behaviour is right; the presentation was not.
+
+**Why it is right.** `cluster_min_points = 1` — forming takes one admitted reading, and corroboration
+lives on the read path. And nothing could have joined it: the radius is not the 25 m ceiling the
+config advertises but `min(2 × accuracy_m, 25)`, which at a median reported accuracy of 4.37 m is
+**6.9 m**. Only **94 of 254** admitted readings have any neighbour at that radius; 188 would at
+25 m. So 163 of 204 clusters are singletons — and within one pass, two readings 14 m apart (the
+measured median gap) are two different rough spots, not one defect seen twice. **Singletons are the
+correct unit.**
+
+**Why no threshold moved.** Two findings were recorded in
+[`from-reading-to-defect.md`](../architecture/from-reading-to-defect.md) rather than acted on. The
+2σ buffer omits the dominant error term — 56% of readings carry whole-second timestamps, worth
+**±12.4 m of along-track uncertainty** at 12.38 m/s against the 8.7 m the buffer allows. But
+widening it cannot manufacture corroboration: admitted readings with another admitted reading from a
+different day number **2 at 7 m, 5 at 20 m, 5 at 25 m, 11 at 50 m, 17 at 100 m**. The same defect is
+essentially never detected twice, and that is repeatability, not a parameter. Raising
+`cluster_min_points` would only delete candidates, exactly as it did before.
+
+**What was actually wrong.** `confidence` is `GREATEST(sensor_p_pothole, max_fused)`, so on a
+single-member cluster it is the sensor model's own posterior — which §2 of the architecture doc says
+saturates and must be read as *which component*, not *how sure*. Labelled **Confidence** and printed
+above **Observations 1**, it read as strength of evidence. The map had already been made honest (a
+hollow ring); the panel had not.
+
+- A **Candidate** / **Corroborated** badge in the panel, from `isCorroborated` — moved out of
+  `map/layers.ts` into a top-level `corroboration.ts` so the map, the panel and the dock share one
+  predicate and cannot disagree. Outlined rather than filled, to echo the map's hollow ring.
+- **`Confidence` → `Classifier score`**, with the caveat in a `title` on the row.
+- The corroboration note moved **above** the facts it qualifies, and gained the case it was missing:
+  it used to render *"All observations within 0 s"* for a cluster with **one** observation — a claim
+  about a set of one, shown on 163 of 204 clusters. It now says it is one reading on one pass.
+
 ---
 
 ## Verification

@@ -19,13 +19,18 @@ import { notScoredNote, overlayBoxesFor, scoreLines } from '../frameview/evidenc
 import { FrameViewer } from '../frameview/viewer.ts';
 import { FrameStage } from '../review/overlay.ts';
 import type { ClusterDetailResponse } from '../types.ts';
+import { isCorroborated } from '../corroboration.ts';
 import { spanNoteText } from './corroboration.ts';
 import { type FrameEntry, loadFrames } from './frames.ts';
 
 /** The corroboration warning, or nothing when the cluster is genuinely corroborated. */
-function spanNote(passes: number, spanS: number | null): HTMLElement | null {
-  const text = spanNoteText(passes, spanS);
-  return text === null ? null : el('p', { class: 'empty-note', text });
+function spanNote(
+  passes: number,
+  spanS: number | null,
+  observationCount: number,
+): HTMLElement | null {
+  const text = spanNoteText(passes, spanS, observationCount);
+  return text === null ? null : el('p', { class: 'panel-note', text });
 }
 
 export interface PanelCallbacks {
@@ -157,11 +162,23 @@ export class DetailPanel {
 
     const body = el('div', { class: 'panel-body' });
 
-    // Status + severity, the two things an operator triages on.
+    // Status + severity, the two things an operator triages on -- plus whether this
+    // is evidence or a lead. Forming a cluster takes ONE admitted reading, so "Open"
+    // and a severity tier alone read as a confirmed defect for the 163 of 204
+    // clusters built from a single observation. Same predicate as the map's hollow
+    // ring and the dock's KPI, so the three cannot disagree.
+    const corroborated = isCorroborated(detail.distinct_devices, detail.distinct_passes);
     const badges = el('div', { class: 'badge-row' }, [
       el('span', {
         class: repaired ? 'badge badge-repaired' : 'badge badge-open',
         text: repaired ? 'Repaired' : 'Open',
+      }),
+      el('span', {
+        class: corroborated ? 'badge badge-corroborated' : 'badge badge-candidate',
+        text: corroborated ? 'Corroborated' : 'Candidate',
+        title: corroborated
+          ? 'Seen by two devices, or on three separate passes — the public API serves this.'
+          : 'Not yet seen twice. The public API does not serve this, and the map draws it hollow.',
       }),
       el('span', {
         class: 'badge badge-severity',
@@ -172,21 +189,33 @@ export class DetailPanel {
     ]);
     body.append(badges);
 
+    // Above the numbers it qualifies, not below them. For an uncorroborated cluster
+    // this is the most important line on the panel.
+    const note = spanNote(detail.distinct_passes, detail.member_span_s, detail.observation_count);
+    if (note) body.append(note);
+
     body.append(
       el('section', { class: 'panel-section' }, [
         field('Corroborating devices', plural(detail.distinct_devices, 'device')),
         field('Corroborating passes', plural(detail.distinct_passes, 'pass', 'passes')),
         field('Observations', String(detail.observation_count)),
-        field('Confidence', formatNumber(detail.confidence, 2)),
+        // NOT "Confidence". The value is GREATEST(sensor_p_pothole, max_fused)
+        // (app/fusion/service.py), so on a single-member cluster it is the sensor
+        // model's own posterior -- from an unsupervised mixture that saturates, and
+        // which from-reading-to-defect.md says to read as WHICH component, not how
+        // sure. Printed as "Confidence 1.00" directly above "Observations 1", it
+        // read as strength of evidence, which is the one thing it is not.
+        field(
+          'Classifier score',
+          formatNumber(detail.confidence, 2),
+          false,
+          "The strongest member's pothole score, or its camera pairing if that was higher. " +
+            'It says which group the jolt fell into, not how certain the defect is — and it ' +
+            'saturates, so 1.00 is common and does not mean confirmed.',
+        ),
         field('Last seen', formatDateTime(detail.last_seen)),
         field('Source', detail.source ?? '—'),
         field('Location', `${detail.lat.toFixed(5)}, ${detail.lon.toFixed(5)}`, true),
-        // member_span_s rendered as a judgement rather than a float. migrations/015
-        // calls it "the diagnostic that exposed the problem in the first place":
-        // a cluster whose members span seconds is one drive-past, and reporting
-        // "1 pass" without that context reads like a measurement rather than a
-        // warning that nothing has corroborated this defect yet.
-        spanNote(detail.distinct_passes, detail.member_span_s),
       ]),
     );
 

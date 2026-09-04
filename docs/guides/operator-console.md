@@ -122,7 +122,8 @@ because shape still works in greyscale, or for a colour-blind operator.
 - A **hollow triangle** is a reading that reached no defect. Most readings are hollow, and that is
   normal — see below.
 - A **hollow square** is a photograph that matched no jolt.
-- A **hollow circle** is a defect **nothing has corroborated yet**. On the data collected so far
+- A **hollow circle** is a defect **nothing has corroborated yet** — the panel badges the same
+  state as **Candidate**. On the data collected so far
   that is *every* defect, which is the same fact the **Corroborated** card reports as `0 of N`.
 
 Two more modifiers:
@@ -394,6 +395,7 @@ unrotated picture.
 | **Tier (Low…Severe)** | Fixed bands over the severity number: 0 / 0.25 / 0.5 / 0.75. |
 | **`Server p`** | The server detector's score for a photograph. **`0.000` means "found nothing", which is different from not yet scored** — the latter says *not yet scored*. If the frame carries a `VLM` badge, this is a blend of two opinions, not the detector alone. |
 | **`On-device p`** | What the phone thought at capture time, before upload. |
+| **`Classifier score`** (panel) | The strongest reading's pothole score. **Not a measure of evidence** — it comes from an unsupervised model whose scores saturate, so 1.00 is common and does not mean confirmed. A defect built from one reading can show 1.00. |
 | **`Fused confidence`** | How well a photograph and a jolt matched each other in time and space. |
 | **`Corroborating passes`** | Separate drives past the same spot. A pass is one device's continuous run with no gap over 20 minutes. **1 means nobody has ever confirmed this defect.** |
 | **`Corroborated` (dock)** | How many defects in view meet the publishing bar: two devices, or three passes. |
@@ -420,6 +422,7 @@ read [`from-reading-to-defect.md`](../architecture/from-reading-to-defect.md).
 | A reading at `P(pothole) 0.998` is flagged as an outlier | The outlier check is a different test and never sees that number. See above. |
 | Most triangles are hollow | Expected. Only pothole-classed readings can form a defect, and they are a small minority of what the phone records. |
 | I turned on Sensor observations and only see a few | The Class filter starts on **Pothole**. Switch on Crack and Other to see everything. |
+| A defect is built from **one** reading, and says `Classifier score 1.00` | Both are expected. Creating a defect takes a single reading — the panel badges it **Candidate** and says so in words. The score is the classifier's, not a count of evidence. |
 | Every defect circle is hollow | Correct, and it is the point: nothing in the collected data has been corroborated yet. It matches the **Corroborated** card. |
 | The map is empty | Three separate causes: you are below zoom 13 (banner says so); the starting view is configured and may point somewhere with no data; or the map failed to load its worker, in which case **nothing** vector renders. |
 | I ticked a raw-detection box and nothing appeared | Those layers need **zoom 15+**. Zoom in — they will not appear on their own. |
