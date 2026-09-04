@@ -19,13 +19,18 @@
  */
 
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { marked } from 'marked';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
-const source = join(repoRoot, 'docs', 'guides', 'operator-console.md');
+// GUIDE_SOURCE exists for the Docker build, where only dashboard/ is copied into
+// the stage and the repo root is not where this script would compute it to be.
+// An explicit path beats making the Dockerfile guess this script's directory depth.
+const source = process.env.GUIDE_SOURCE
+  ? resolve(process.env.GUIDE_SOURCE)
+  : join(repoRoot, 'docs', 'guides', 'operator-console.md');
 const publicDir = join(here, '..', 'public');
 const target = join(publicDir, 'guide.html');
 

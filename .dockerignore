@@ -67,6 +67,13 @@ tests
 docs
 *.md
 
+# ...except the operator guide. scripts/build-guide.mjs renders it into the bundle
+# as the console's in-app Help page, so the dashboard build stage genuinely needs
+# it in the context. Both negations are required: `docs` excludes the tree and
+# `*.md` excludes the file, and the last matching pattern is the one that counts.
+!docs/guides
+!docs/guides/*.md
+
 # Compose itself never needs to be in the image.
 docker-compose.yml
 Dockerfile

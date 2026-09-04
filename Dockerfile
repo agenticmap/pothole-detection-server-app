@@ -20,6 +20,15 @@ RUN npm ci
 # worker out of node_modules into public/. Without it every vector source
 # silently fails to load, so a missing worker is a blank map, not an error.
 COPY dashboard/ ./
+
+# The operator guide is rendered into the bundle as the console's Help page by
+# scripts/build-guide.mjs. It lives in docs/ because it is documentation first, so
+# the dashboard stage has to be handed it explicitly — .dockerignore re-includes
+# docs/guides for exactly this. Without it the prebuild hook fails the build
+# rather than shipping a Help link to a blank page.
+COPY docs/guides/operator-console.md /guide/operator-console.md
+ENV GUIDE_SOURCE=/guide/operator-console.md
+
 RUN npm run build
 
 
