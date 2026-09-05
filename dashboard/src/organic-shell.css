@@ -146,27 +146,50 @@ body {
   background: var(--color-surface-sunken);
 }
 
-/* Legend moves to the bottom RIGHT — the dock owns the left edge.
- * Below 700px of map pane the .legend-strip below replaces it (see
- * INTEGRATION.md; the swap is a width check in JS, not a media query, because
- * the pane width depends on whether the detail panel is open).
+/* Legend at the top RIGHT — the dock owns the left edge, and MapLibre's zoom stack
+ * plus the attribution own the bottom right. Position lives on .map-controls in
+ * styles.css; this block only skins the card.
  *
- * It has to sit ABOVE MapLibre's bottom-right control stack, which shares this
- * corner. At `bottom: var(--space-3)` it covered the zoom buttons entirely — a
- * click on zoom-in hit the legend instead — and the attribution strip with them,
- * which the basemap licence requires to stay visible. `--map-ctrl-bottom-h` is
- * measured and published by installLegendResponsiveness() in shell.ts; the
- * fallback covers the first frame, before MapLibre has added the controls. */
+ * Below 700px of map pane the .legend-strip below replaces it (the swap is a width
+ * check in JS, not a media query, because the pane width depends on whether the
+ * detail panel is open). Both are children of the same wrapper, so the swap moves
+ * nothing. */
 .legend {
-  left: auto;
-  right: var(--space-3);
-  bottom: calc(var(--space-3) + var(--map-ctrl-bottom-h, 116px));
   min-width: 172px;
   padding: var(--space-3) var(--space-4);
   background: var(--color-canvas);
   border: 0;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
+}
+
+.basemap-control {
+  min-width: 172px; /* matches .legend, so the column has one edge */
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-canvas);
+  border: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+/* Rule of the skin: anything you press is a pill. */
+.basemap-select {
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  padding: var(--space-2) var(--space-3);
+}
+
+.legend-collapsed {
+  border: 0;
+  background: var(--color-canvas);
+  box-shadow: var(--shadow-md);
+  padding: 9px var(--space-4);
+}
+
+.legend-collapsed-caret,
+.legend-collapse {
+  color: var(--color-primary);
 }
 
 .legend-list {
@@ -181,12 +204,9 @@ body {
     0 0 0 2.5px var(--color-border);
 }
 
-/* Compact fallback: swatches only, under the zoom control. */
+/* Compact fallback: swatches only, as ONE pill-shaped row. Position comes from
+   .map-controls, like the card it replaces. */
 .legend-strip {
-  position: absolute;
-  right: var(--space-3);
-  top: calc(var(--space-3) + 78px);
-  z-index: var(--z-overlay);
   display: flex;
   align-items: center;
   gap: var(--space-1);
@@ -194,6 +214,32 @@ body {
   border-radius: var(--radius-pill);
   background: var(--color-canvas);
   box-shadow: var(--shadow-md);
+}
+
+/* The list is a COLUMN inside the card and a ROW inside the pill. Without this
+   override it inherits .legend-list's flex-direction: column, and the "strip" was
+   a vertical stack of sixteen swatches inside a pill-radius box. */
+.legend-strip .legend-list {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+/* display: contents promotes the header's children to flex items of the pill, so
+   the collapse button survives (pushed to the end by `order`) while the title
+   drops out. CSS owning this is why installLegendResponsiveness no longer has to
+   hide .legend-title by hand after every className swap. */
+.legend-strip .legend-header {
+  display: contents;
+}
+
+.legend-strip .legend-title,
+.legend-strip .legend-section {
+  display: none;
+}
+
+.legend-strip .legend-collapse {
+  order: 1;
 }
 
 .map-banner {

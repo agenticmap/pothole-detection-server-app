@@ -15,6 +15,7 @@ import {
 // Side-effect import: must run before any Map is constructed. See worker.ts.
 import './worker.ts';
 import { basemapStyle } from './basemap.ts';
+import { currentBasemap, type BasemapId } from './basemaps.ts';
 import { frameFacts, frameStatus } from './frame-facts.ts';
 import { framePreviewUrl, IDLE, type PreviewState, reducePreview } from './frame-preview.ts';
 import { needsPan, popupPanOffset } from './popup-fit.ts';
@@ -111,6 +112,19 @@ export class PotholeMap {
    * default so the two cannot disagree before the first onFilterChange arrives.
    */
   private observationClasses: ReadonlySet<string> = new Set(['pothole']);
+  /**
+   * The dock's last cluster filter, held for exactly the reason observationClasses
+   * is: `individualLayer()` is rebuilt by addClusterLayers after every setStyle and
+   * comes back carrying only BASE_INDIVIDUAL_FILTER. Without this the chips would
+   * keep rendering as active while the map quietly showed everything again — which
+   * was already true of a theme flip, and would have become true of every basemap
+   * change. Null means "never set", i.e. leave the layer's own filter alone.
+   */
+  private clusterFilter: {
+    tiers: ReadonlySet<string>;
+    minDevices: number;
+    sources: { selected: ReadonlySet<string>; all: boolean };
+  } | null = null;
   /** Same reasoning as observationsVisible: 5,615 frames would bury 24 clusters. */
   private framesVisible = false;
   /** Reused rather than constructed per click, so only one can ever be open. */
@@ -136,12 +150,17 @@ export class PotholeMap {
   private previewController: AbortController | null = null;
   private previewObjectUrl: string | null = null;
 
+  /** Which basemap is under the markers, and which palette the chrome is using.
+   * Both are held because a change to either rebuilds the style from the pair. */
+  private basemap: BasemapId = currentBasemap();
+  private theme: Theme = currentTheme();
+
   constructor(private readonly options: PotholeMapOptions) {
     this.assetType = options.assetType;
 
     this.map = new MapLibreMap({
       container: options.container,
-      style: basemapStyle(currentTheme()),
+      style: basemapStyle(this.basemap, this.theme),
       center: [options.initialView.lon, options.initialView.lat],
       zoom: options.initialView.zoom,
       attributionControl: { compact: true },
@@ -359,6 +378,9 @@ export class PotholeMap {
     // construction — so a filter set while it did not exist was silently dropped,
     // and every class rendered regardless of the chips.
     this.applyObservationFilter();
+    // The cluster chips need exactly the same treatment: individualLayer() comes
+    // back carrying only BASE_INDIVIDUAL_FILTER.
+    this.applyClusterFilter();
     this.map.setLayoutProperty(
       LAYER_FRAMES,
       'visibility',
@@ -396,7 +418,37 @@ export class PotholeMap {
    * change rather than an accident.
    */
   applyTheme(theme: Theme): void {
-    this.map.setStyle(basemapStyle(theme));
+    this.theme = theme;
+    this.restyle();
+  }
+
+  /**
+   * Swap what is under the markers. Same rebuild as a theme flip, same caveats.
+   *
+   * The basemap preference itself is owned by basemaps.ts (and is already stored,
+   * and already on `data-theme`'s sibling attribute, by the time this is called) —
+   * this only re-styles the map.
+   */
+  setBasemap(basemap: BasemapId): void {
+    if (basemap === this.basemap) return;
+    this.basemap = basemap;
+    this.restyle();
+  }
+
+  /**
+   * Rebuild the style from the current (basemap, theme) pair.
+   *
+   * This runs on a theme flip even when the selected basemap does not depend on
+   * the theme, which looks wasteful and is not: addClusterLayers() is the only
+   * place that re-registers the marker BITMAPS, and those bake --review-class-*,
+   * --marker-neutral and --color-accent-2 in at registration time. Skip the
+   * setStyle on `satellite` or `grayscale` and a theme flip leaves the previous
+   * theme's markers and halo on screen — exactly the failure theme.ts's header
+   * warns about. For a non-themed basemap the new style is identical to the old
+   * one, so its tiles are already cached and the cost is one style diff.
+   */
+  private restyle(): void {
+    this.map.setStyle(basemapStyle(this.basemap, this.theme));
     // `styledata` rather than `style.load`: the latter does not fire on setStyle
     // in every path. Guarded because the event can arrive more than once.
     this.map.once('styledata', () => {
@@ -518,6 +570,21 @@ export class PotholeMap {
     minDevices: number,
     sources: { selected: ReadonlySet<string>; all: boolean },
   ): void {
+    // Held as state, not just pushed at the layer — the same rule setObservationFilter
+    // follows, and for the same reason: addClusterLayers rebuilds this layer after
+    // every setStyle, so a filter that lives only on the layer is lost on a theme or
+    // basemap change while the dock's chips still show it as active.
+    this.clusterFilter = {
+      tiers: new Set(selectedTiers),
+      minDevices,
+      sources: { selected: new Set(sources.selected), all: sources.all },
+    };
+    this.applyClusterFilter();
+  }
+
+  private applyClusterFilter(): void {
+    if (!this.clusterFilter) return;
+    const { tiers: selectedTiers, minDevices, sources } = this.clusterFilter;
     if (!this.map.getLayer(LAYER_INDIVIDUAL)) return;
 
     const everyTier = selectedTiers.size === SEVERITY_TIERS.length + 1;

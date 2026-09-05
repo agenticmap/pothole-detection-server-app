@@ -192,6 +192,10 @@
   --panel-width: 428px;
   /* The floating dock of KPIs, filters and the hover readout. */
   --dock-width: 322px;
+  /* Width the top-right control column (legend + basemap switcher) is assumed to
+     occupy. Only the centred map banner reads it, to keep itself clear of both
+     edges; the column itself sizes to its content. */
+  --map-controls-reserve: 200px;
 
   /* ── Type ──────────────────────────────────────────────────────────────
    * Figtree for the interface, Caprasimo as the display voice — headings,
@@ -308,6 +312,22 @@
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
   --shadow-md: 0 3px 10px rgb(0 0 0 / 0.45);
   --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.5);
+}
+
+/* ── Imagery basemap ──────────────────────────────────────────────────────
+ * Aerial photography is dark and busy in BOTH themes, so the marker halo has to
+ * take the light value regardless of data-theme — a near-black ring on dark
+ * imagery disappears, and the aggregate count's text halo goes with it.
+ *
+ * AFTER the dark block on purpose: both selectors are specificity 0,1,0 on the
+ * same element, so source order is what decides, and this must win.
+ *
+ * Set as an attribute by map/basemaps.ts, exactly as theme.ts sets data-theme, and
+ * for the same payoff: severity.ts, layers.ts, registerMarkerIcons and the legend
+ * swatch rings all resolve it through cssVar(), so none of them needs to learn
+ * what a basemap is. */
+[data-basemap='satellite'] {
+  --marker-halo: #f9f4ed;
 }
 
 /* Motion is functional here, never decorative — so when the user asks for less

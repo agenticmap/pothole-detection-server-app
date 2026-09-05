@@ -224,11 +224,87 @@ a.link-button {
   overflow: hidden;
 }
 
-.legend {
+/* Top-right overlay column: the legend (or its collapsed pill) above the basemap
+ * switcher. ONE positioned wrapper, so installLegendResponsiveness can swap the
+ * legend's whole className between .legend and .legend-strip without the position
+ * going with it — that swap is a whole-className assignment, and anything else
+ * parked on the element would be erased by it.
+ *
+ * Top-right rather than bottom-right, and that is what retired --map-ctrl-bottom-h:
+ * the bottom-right corner belongs to MapLibre's zoom stack and the attribution
+ * strip, which the basemap licence requires to stay visible AND clickable. The
+ * legend used to share that corner and win — Playwright reported `.legend
+ * intercepts pointer events` on a zoom-in click, and the attribution went under it
+ * too. Measuring the stack and dodging it was a workaround for sharing the corner;
+ * nothing shares it now.
+ *
+ * pointer-events: the wrapper is a transparent box floating over the canvas, so
+ * only the cards inside it may swallow a click. Same failure as above, pre-empted
+ * for the gap between the cards. */
+.map-controls {
   position: absolute;
-  left: var(--space-3);
-  bottom: var(--space-5);
+  top: var(--space-3);
+  right: var(--space-3);
   z-index: var(--z-overlay);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  /* Never taller than the pane: the legend scrolls rather than pushing the basemap
+     switcher off the bottom of the map. */
+  max-height: calc(100% - var(--space-3) * 2);
+  min-height: 0;
+  pointer-events: none;
+}
+
+.map-controls > * {
+  pointer-events: auto;
+}
+
+.legend {
+  /* Position is the wrapper's job. */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-3);
+  min-width: 132px;
+  min-height: 0;
+  overflow-y: auto;
+  /* A wheel that runs off the end of the list must not scroll the page behind it. */
+  overscroll-behavior: contain;
+}
+
+/* Title and collapse control on one row. */
+.legend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+/* Mirror of .dock-collapsed on the opposite edge, so the two overlays put
+   themselves away the same way. */
+.legend-collapsed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.basemap-control {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 0 0 auto;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -237,8 +313,19 @@ a.link-button {
   min-width: 132px;
 }
 
+.basemap-select {
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
 .legend-title {
-  margin: 0 0 var(--space-2);
+  /* The header owns the gap now. */
+  margin: 0;
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -307,6 +394,14 @@ a.link-button {
   padding: var(--space-2) var(--space-4);
   font-size: var(--text-sm);
   color: var(--color-text-muted);
+  /* Centred between two overlays it must not slide under: the dock on the left and
+     the control column on the right. Below the clamp it wraps to a second line,
+     which is better than reading half a sentence from behind the legend. */
+  max-width: max(
+    18ch,
+    calc(100% - 2 * (var(--map-controls-reserve) + var(--space-3)))
+  );
+  text-align: center;
 }
 
 /* ── Detail panel ──────────────────────────────────────────────────────── */
@@ -941,6 +1036,13 @@ a.link-button {
 .dock-scroll[hidden],
 .dock-readout[hidden],
 .provenance-note[hidden],
+/* The legend's collapsed pill and its compact strip both set a display of their
+ * own, so without these the pill would render on top of the open legend — exactly
+ * the failure this block exists for. .legend is a plain div and needs no
+ * restatement, but it is listed so the set reads as one group. */
+.legend[hidden],
+.legend-strip[hidden],
+.legend-collapsed[hidden],
 /* Module switching relies on these three, and .map-container and .module-container
  * both set a display of their own. Without restating it here, hiding the map would
  * leave it rendering underneath the review module. */

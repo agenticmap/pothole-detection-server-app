@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-03
+updated: 2026-09-04
 ---
 
 # RoadWatch — operator dashboard
@@ -346,6 +346,25 @@ a recent date. Verify the result by dropping it on <https://protomaps.github.io/
 development and *not* fine for a pilot — a municipal tool should not lose its street labels
 because a third-party origin is having a bad day. Self-hosting them under
 `public/basemap-assets/` is an open task.
+
+### Basemap options
+
+The **Basemap** picker under the legend offers the Organic flavor (default), Protomaps' five named
+flavors, and satellite imagery. All but the last render from the same PMTiles archive.
+
+**Satellite is Esri World Imagery, and it is a third-party runtime dependency with no contract
+behind it** — the same objection as the glyphs above, but in the hot path for *every tile* rather
+than once per session. There is no key and no published rate limit, and Esri's terms cover this for
+ArcGIS-connected applications. Before a pilot ships to anyone paying, move to a purchased ArcGIS
+subscription or the province's orthophoto WMTS; it is one object in `src/map/basemaps.ts`. The
+imagery attribution is carried on the source and rendered by MapLibre's own attribution control, so
+it must not be stripped.
+
+Two things about that source worth knowing before editing it. Out of coverage Esri answers **HTTP
+200 with a "no data" placeholder**, not a 404, so MapLibre's error path never fires — hence the
+`maxzoom: 19` cap, which makes it overzoom a real tile instead of showing grey squares. And the path
+is ArcGIS REST's `/{z}/{y}/{x}`, row before column; transposing it yields scrambled imagery that
+looks like a network fault.
 
 ### Demo data
 

@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-18
+updated: 2026-09-04
 ---
 
 # Phase 2.5b / 2.5c — Dashboard design, vector basemap, and the operator dock
@@ -354,6 +354,11 @@ cosmetic — the OSM/Protomaps basemap licence requires it to stay visible. `she
 control stack and publishes `--map-ctrl-bottom-h`; the legend clears it with `calc()`. Measured
 rather than hardcoded because the attribution re-wraps on a narrow pane and the compact/expanded
 toggle changes its height at runtime.
+
+> **Superseded.** The legend later moved to the top right, so it no longer shares that corner with
+> anything and the measuring was deleted along with `--map-ctrl-bottom-h`. The licence requirement
+> the workaround protected is now satisfied structurally — nothing overlays the attribution at all.
+> See `.map-controls` in `dashboard/src/styles.css`.
 
 **Also corrected here:** this file's header described `severity_scale = 2.0`. It is now 0.25 — the
 old value saturated below the *minimum* of the observed pothole distribution, so every cluster

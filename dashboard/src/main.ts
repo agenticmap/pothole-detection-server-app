@@ -29,9 +29,14 @@ import { Dock } from './dock.ts';
 import { ReviewModule } from './review/review.ts';
 import { getStats } from './stats.ts';
 import { initTheme } from './theme.ts';
+import { initBasemap } from './map/basemaps.ts';
 
 // Applied before the first render so there is no light flash on a dark-theme load.
 initTheme();
+// Likewise before the first render: this sets `data-basemap`, which the satellite
+// block in tokens.css keys --marker-halo off, and the map reads that token while
+// building its very first set of marker bitmaps.
+initBasemap();
 
 /** No extent endpoint exists, so the initial view is configured, not discovered. */
 const DEFAULT_VIEW: MapView = {
@@ -168,6 +173,12 @@ function renderApp(): void {
       },
       onModuleChange: (next) => {
         void showModule(next);
+      },
+      onBasemapChange: (basemap) => {
+        // The preference and `data-basemap` are already written by the control;
+        // this only rebuilds the style. Like a theme flip, that rebuild is also
+        // what repaints the markers.
+        map?.setBasemap(basemap);
       },
     },
   );

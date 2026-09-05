@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-03
+updated: 2026-09-04
 ---
 
 # The operator console — a user guide
@@ -137,9 +137,28 @@ Two more modifiers:
 > you can check the classifier's work, but they are never eligible for grouping, so they are always
 > hollow. That is why the Class filter below starts on **Pothole** alone.
 
-Colour on a circle is **severity**. The **legend**, bottom-right, is grouped into *Severity*, *What
-it is* and *Hollow means*, and is always on screen. On a narrow window it collapses to swatches with
-the labels moved into tooltips.
+Colour on a circle is **severity**. The **legend**, top-right, is grouped into *Severity*, *What it
+is* and *Hollow means*. On a narrow window it collapses to swatches with the labels moved into
+tooltips.
+
+Use the **›** button in its header to put the legend away; it shrinks to a **Severity** pill you
+click to bring it back. The console remembers which you chose.
+
+## Changing the basemap
+
+Under the legend is a **Basemap** picker.
+
+**Organic** is the default: a deliberately drained street map, so the severity markers are the only
+saturated thing on screen. **Light**, **Dark**, **White**, **Greyscale** and **Black** are plain
+alternatives — useful when you are cross-checking against another tool, or printing.
+
+**Satellite** is aerial imagery with the street names kept on top. Reach for it when the question is
+*what is actually there* — imagery tells a pothole from a manhole cover or a patch of shadow. It is
+also the only option with real detail past zoom 14; the street map stops there and simply magnifies
+itself above it.
+
+The choice is yours alone and is remembered between sessions. It does not travel in a shared link,
+and it does not change what anyone else sees.
 
 ## Zoom decides what exists
 

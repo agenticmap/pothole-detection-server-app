@@ -17,6 +17,13 @@ import { SEVERITY_TIERS, UNRATED_LABEL, severityColors, unknownColor } from './s
 import { cssVar } from './tokens.ts';
 import { currentTheme, toggleTheme, type Theme } from './theme.ts';
 import type { MapView } from './map/map.ts';
+import {
+  BASEMAPS,
+  currentBasemap,
+  isBasemapId,
+  setStoredBasemap,
+  type BasemapId,
+} from './map/basemaps.ts';
 
 export interface AssetType {
   id: string;
@@ -176,6 +183,10 @@ export interface ShellCallbacks {
   /** Fired after the theme flips, so the map can repaint its layers. */
   onThemeChange: (theme: Theme) => void;
   onModuleChange: (module: ModuleId) => void;
+  /** Fired after the operator picks a basemap. The preference is already stored
+   * and `data-basemap` already set by the time this runs, so the handler only has
+   * to re-style the map. */
+  onBasemapChange: (basemap: BasemapId) => void;
 }
 
 /**
@@ -312,7 +323,7 @@ export function buildShell(
   // map is never destroyed, because a WebGL context is expensive to rebuild.
   const moduleContainer = el('div', { class: 'module-container', hidden: 'hidden' });
 
-  mapContainer.append(buildLegend());
+  mapContainer.append(buildMapControls(callbacks.onBasemapChange));
 
   root.replaceChildren(
     topbar,
@@ -323,16 +334,148 @@ export function buildShell(
 }
 
 /**
- * The legend is always visible, not tucked behind a control. A severity ramp the
- * operator has to go looking for is a ramp they will misread.
+ * The top-right overlay column: the severity legend (or its collapsed pill), with
+ * the basemap switcher beneath it.
+ *
+ * A wrapper rather than two absolutely-positioned siblings, and that is the whole
+ * design. installLegendResponsiveness swaps the legend's ENTIRE className between
+ * 'legend' and 'legend-strip', so anything the legend must keep across that swap
+ * cannot be a class. Position therefore lives on this wrapper, and open/closed is
+ * the `hidden` ATTRIBUTE — which a className assignment cannot touch. That is the
+ * same mechanism Dock.setOpen uses, for a related reason.
+ *
+ * The legend is no longer always visible, which reverses the note this function
+ * used to carry ("a severity ramp the operator has to go looking for is a ramp
+ * they will misread"). That was written when the legend was six rows; Phase 2.11
+ * grew it to fifteen across three sections, and a permanent block that size is its
+ * own legibility problem. It still opens by default, and the pill keeps the word
+ * "Severity" on screen so there is something to go looking for.
  */
-function buildLegend(): HTMLElement {
+function buildMapControls(onBasemapChange: (id: BasemapId) => void): HTMLElement {
+  // Icon-only, so the label and title describe the ACTION rather than the state —
+  // the convention buildThemeToggle follows.
+  const collapse = el('button', {
+    class: 'icon-button legend-collapse',
+    type: 'button',
+    text: '›',
+    'aria-label': 'Collapse the severity legend',
+    title: 'Collapse the severity legend',
+    'aria-expanded': 'true',
+  });
+
   const legend = el('div', { class: 'legend' }, [
-    el('h2', { class: 'legend-title', text: 'Severity' }),
+    el('div', { class: 'legend-header' }, [
+      el('h2', { class: 'legend-title', text: 'Severity' }),
+      collapse,
+    ]),
     el('ul', { class: 'legend-list' }),
   ]);
   renderLegendItems(legend);
-  return legend;
+
+  const pill = el('button', {
+    class: 'legend-collapsed',
+    type: 'button',
+    hidden: 'hidden',
+    'aria-expanded': 'false',
+    'aria-label': 'Show the severity legend',
+  });
+  pill.append(
+    el('span', { class: 'legend-collapsed-caret', text: '‹', 'aria-hidden': 'true' }),
+    el('span', { text: 'Severity' }),
+  );
+
+  const setOpen = (open: boolean): void => {
+    legend.hidden = !open;
+    pill.hidden = open;
+    collapse.setAttribute('aria-expanded', String(open));
+    pill.setAttribute('aria-expanded', String(open));
+    storeLegendOpen(open);
+  };
+  collapse.addEventListener('click', () => setOpen(false));
+  pill.addEventListener('click', () => {
+    setOpen(true);
+    // Focus follows the disclosure, or a keyboard operator is left standing on a
+    // button that just became display:none.
+    collapse.focus();
+  });
+
+  const controls = el('div', { class: 'map-controls' }, [
+    legend,
+    pill,
+    buildBasemapControl(onBasemapChange),
+  ]);
+  // Applied rather than set as initial attributes, so one function is the single
+  // writer of both elements' visibility and they cannot disagree.
+  setOpen(storedLegendOpen());
+  return controls;
+}
+
+/**
+ * Whether the legend is open.
+ *
+ * Remembered for the same reason the review module remembers its keyboard legend
+ * (review.ts): an operator should state a preference like this once. Deliberately
+ * INDEPENDENT of `compact` — that is layout-driven and chooses card vs strip,
+ * while this is operator-driven and chooses legend vs pill. Auto-collapsing on a
+ * narrow pane would overwrite an explicit choice with a transient layout event,
+ * and the detail panel opening and closing would flap it.
+ */
+const LEGEND_OPEN_KEY = 'roadwatch.legend';
+
+function storedLegendOpen(): boolean {
+  try {
+    return (localStorage.getItem(LEGEND_OPEN_KEY) ?? '1') === '1';
+  } catch {
+    // Private browsing or a blocked origin — open, as on a first visit.
+    return true;
+  }
+}
+
+function storeLegendOpen(open: boolean): void {
+  try {
+    localStorage.setItem(LEGEND_OPEN_KEY, open ? '1' : '0');
+  } catch {
+    // Preference simply won't survive a reload; not worth failing the click.
+  }
+}
+
+/**
+ * The basemap picker.
+ *
+ * A native <select>, following the .asset-select precedent: seven options are
+ * keyboard- and screen-reader-correct for free, with no popover to position,
+ * dismiss or focus-trap. A custom listbox for seven static items would be more
+ * bug surface than component.
+ *
+ * Not collapsible with the legend. It is one row, and an operator who wants
+ * imagery should not first have to find the legend in order to un-hide it.
+ */
+function buildBasemapControl(onChange: (id: BasemapId) => void): HTMLElement {
+  const select = el('select', { class: 'basemap-select', 'aria-label': 'Basemap' });
+  for (const option of BASEMAPS) {
+    select.append(
+      el('option', {
+        value: option.id,
+        selected: option.id === currentBasemap(),
+        text: option.label,
+      }),
+    );
+  }
+  select.addEventListener('change', () => {
+    // A <select> yields a string; the guard is what keeps an unknown value from
+    // reaching namedFlavor(), which throws rather than falling back.
+    if (!isBasemapId(select.value)) return;
+    // Stores the preference AND sets `data-basemap` — which must happen before the
+    // map re-styles, because addClusterLayers re-reads --marker-halo from it.
+    setStoredBasemap(select.value);
+    onChange(select.value);
+  });
+  // .legend-title reuses the terracotta small-caps eyebrow, so the two cards read
+  // as one column rather than two unrelated boxes.
+  return el('div', { class: 'basemap-control' }, [
+    el('h2', { class: 'legend-title', text: 'Basemap' }),
+    select,
+  ]);
 }
 
 /**
@@ -497,72 +640,36 @@ export function refreshLegend(root: ParentNode = document): void {
  */
 const COMPACT_BELOW_PX = 700;
 
-/**
- * Publish the height of MapLibre's bottom-right control stack so the legend can
- * sit clear of it.
- *
- * Both are absolutely positioned in the same corner, and the legend was winning:
- * measured at 1920x889 it spanned y 653-865 and covered the zoom buttons
- * (765-823) outright -- Playwright reported `.legend intercepts pointer events`
- * when asked to click zoom-in -- as well as the attribution strip (843-867).
- * The second of those is not cosmetic: the OSM/Protomaps attribution has to stay
- * visible to satisfy the basemap licence.
- *
- * Measured rather than hardcoded because the stack's height is not constant --
- * the attribution wraps to two lines on a narrow pane, and the compact/expanded
- * attribution toggle changes it at runtime.
- */
-function publishControlStackHeight(mapContainer: HTMLElement): void {
-  const stack = mapContainer.querySelector('.maplibregl-ctrl-bottom-right');
-  // Fallback keeps the legend clear on the first frame, before MapLibre has
-  // added its controls.
-  const height = stack ? Math.ceil(stack.getBoundingClientRect().height) : 116;
-  mapContainer.style.setProperty('--map-ctrl-bottom-h', `${height}px`);
-}
-
 export function installLegendResponsiveness(
   mapContainer: HTMLElement,
   onResize: () => void,
 ): () => void {
-  publishControlStackHeight(mapContainer);
   const observer = new ResizeObserver((entries) => {
     const width = entries[0]?.contentRect.width ?? mapContainer.clientWidth;
     // A hidden pane is not a layout state to react to, it is an absent one. Switching
     // to another module sets `hidden`, which reports width 0 — and every line below
-    // then misbehaves: the legend flips to its compact strip, the control-stack height
-    // is measured off a display:none element as 0, and map.resize() sizes the canvas
-    // to 0x0. All of it would have to be undone on the way back. The guard wraps the
-    // WHOLE callback for that reason, not just the compact flip.
+    // then misbehaves: the legend flips to its compact strip, and map.resize() sizes
+    // the canvas to 0x0. All of it would have to be undone on the way back. The guard
+    // wraps the WHOLE callback for that reason, not just the compact flip.
     if (width === 0 || !mapContainer.isConnected) return;
     const next = width < COMPACT_BELOW_PX;
     if (next !== compact) {
       compact = next;
       const legend = mapContainer.querySelector('.legend, .legend-strip');
       if (legend) {
+        // A whole-className assignment: nothing else may live on this element's
+        // class list. Position belongs to .map-controls and open/closed is the
+        // `hidden` attribute on this element and its pill sibling, for that reason.
+        // Hiding the title in strip mode is CSS's job now, not this function's.
         legend.className = compact ? 'legend-strip' : 'legend';
-        const title = legend.querySelector('.legend-title');
-        if (title) (title as HTMLElement).hidden = compact;
         renderLegendItems(legend);
       }
     }
     // MapLibre does not watch its container, so without this the canvas keeps the
     // old size and the map appears stretched when the panel opens.
     onResize();
-    publishControlStackHeight(mapContainer);
   });
   observer.observe(mapContainer);
 
-  // The controls are added asynchronously by MapLibre, after this runs, and the
-  // attribution can re-wrap without the pane resizing -- so a container resize
-  // is not the only thing that changes the stack height.
-  const stack = mapContainer.querySelector('.maplibregl-ctrl-bottom-right');
-  const stackObserver = stack
-    ? new ResizeObserver(() => publishControlStackHeight(mapContainer))
-    : null;
-  if (stack && stackObserver) stackObserver.observe(stack);
-
-  return () => {
-    observer.disconnect();
-    stackObserver?.disconnect();
-  };
+  return () => observer.disconnect();
 }

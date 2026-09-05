@@ -20,6 +20,15 @@ import { layers, namedFlavor, type Flavor } from '@protomaps/basemaps';
 import type { LayerSpecification, StyleSpecification } from '@maplibre/maplibre-gl-style-spec';
 import { cssVar } from '../tokens.ts';
 import type { Theme } from '../theme.ts';
+import {
+  basemapOption,
+  DEFAULT_BASEMAP,
+  SATELLITE_BACKDROP,
+  SATELLITE_SOURCE_ID,
+  satelliteFlavor,
+  satelliteSource,
+  type BasemapId,
+} from './basemaps.ts';
 
 export const BASEMAP_SOURCE_ID = 'protomaps';
 
@@ -146,19 +155,103 @@ function organicFlavor(theme: Theme): Flavor {
   };
 }
 
-export function basemapStyle(theme: Theme = 'light'): StyleSpecification {
+/**
+ * The style for a chosen basemap.
+ *
+ * Three shapes behind one entry point: the Organic flavor (theme-derived), one of
+ * Protomaps' five named flavors (fixed, regardless of the UI theme), and imagery.
+ * `theme` is only consulted by the first — see basemaps.ts::BasemapOption.themed.
+ */
+export function basemapStyle(
+  id: BasemapId = DEFAULT_BASEMAP,
+  theme: Theme = 'light',
+): StyleSpecification {
+  if (id === 'satellite') return satelliteStyle();
+  const flavor = basemapOption(id).flavor;
+  return flavor ? namedStyle(flavor) : organicStyle(theme);
+}
+
+/** The archive, declared identically wherever a style needs the vector source. */
+function vectorSource(): StyleSpecification['sources'][string] {
+  return {
+    type: 'vector',
+    url: `pmtiles://${ARCHIVE_URL}`,
+    attribution: '© OpenStreetMap contributors · Protomaps',
+  };
+}
+
+function organicStyle(theme: Theme): StyleSpecification {
   return {
     version: 8,
     glyphs: GLYPHS,
     sprite: `${SPRITE_BASE}/${theme === 'dark' ? 'dark' : 'light'}`,
-    sources: {
-      [BASEMAP_SOURCE_ID]: {
-        type: 'vector',
-        url: `pmtiles://${ARCHIVE_URL}`,
-        attribution: '© OpenStreetMap contributors · Protomaps',
-      },
-    },
+    sources: { [BASEMAP_SOURCE_ID]: vectorSource() },
     layers: basemapLayers(theme),
+  };
+}
+
+/**
+ * One of Protomaps' own flavors, unmodified.
+ *
+ * The sprite follows the FLAVOR, not the UI theme: picking the dark basemap under
+ * a light console is a legitimate choice, and pairing it with the light sprite
+ * sheet would put dark icons on a dark ground. All five names have a published v4
+ * sprite.
+ */
+function namedStyle(flavor: string): StyleSpecification {
+  return {
+    version: 8,
+    glyphs: GLYPHS,
+    sprite: `${SPRITE_BASE}/${flavor}`,
+    sources: { [BASEMAP_SOURCE_ID]: vectorSource() },
+    // The POI filter applies here for both of the reasons it applies to Organic:
+    // pins compete with the severity markers, and @protomaps/basemaps 5.7 asks for
+    // icons the published v4 sprite sheet does not carry.
+    layers: layers(BASEMAP_SOURCE_ID, namedFlavor(flavor), { lang: 'en' }).filter(
+      (layer) => layer.id !== 'pois',
+    ),
+  };
+}
+
+/**
+ * Aerial imagery, with the street labels kept on top.
+ *
+ * The labels are not a nicety: this file already states twice that an operator
+ * reads street names off this map to dispatch a crew, and imagery without them is
+ * imagery you cannot dispatch from. So the PMTiles source is still loaded here —
+ * for the names alone — over the raster.
+ *
+ * The imagery also outruns the archive, which is the practical reason to offer it:
+ * the PMTiles cut stops at z14 and MapLibre merely overzooms above that, while
+ * Esri carries real detail to 19 — the range where someone decides whether a
+ * cluster is a defect or a manhole.
+ */
+function satelliteStyle(): StyleSpecification {
+  return {
+    version: 8,
+    // Required even though the raster itself needs no glyphs: the label layers
+    // below use `text-field`, and a style with text-field and no `glyphs` URL
+    // renders no labels at all, SILENTLY.
+    glyphs: GLYPHS,
+    // Kept so a future icon-bearing label layer does not warn once per feature.
+    sprite: `${SPRITE_BASE}/dark`,
+    sources: {
+      [SATELLITE_SOURCE_ID]: satelliteSource(),
+      [BASEMAP_SOURCE_ID]: vectorSource(),
+    },
+    layers: [
+      // Stops a flash of the page ground before the first imagery tiles land.
+      {
+        id: 'background',
+        type: 'background',
+        paint: { 'background-color': SATELLITE_BACKDROP },
+      },
+      { id: 'satellite', type: 'raster', source: SATELLITE_SOURCE_ID },
+      // BOTH options are required. `labelsOnly` alone returns an EMPTY array —
+      // the label layers are produced by the `lang` branch, so omitting it yields
+      // imagery with no street names and no error. basemaps.spec.ts pins this.
+      ...layers(BASEMAP_SOURCE_ID, satelliteFlavor(), { labelsOnly: true, lang: 'en' }),
+    ],
   };
 }
 
